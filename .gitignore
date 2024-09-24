@@ -1,0 +1,4 @@
+/build
+/CMakeLists_release.txt
+/shader.frag.spv
+/shader.vert.spv

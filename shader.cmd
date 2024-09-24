@@ -1,0 +1,10 @@
+glslc shader.vert -o shader.vert.spv
+glslc shader.frag -o shader.frag.spv
+rmdir /s /q build
+mkdir build
+cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+cmake --build .  --config Release
+cd Release
+app.exe
+cd .../
