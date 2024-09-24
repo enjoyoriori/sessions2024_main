@@ -54,7 +54,8 @@ int main() {
         bool existsGraphicsQueue = false;
 
         for (size_t j = 0; j < queueProps.size(); j++) {
-            if (queueProps[j].queueFlags & vk::QueueFlagBits::eGraphics) {
+            if (queueProps[j].queueFlags & vk::QueueFlagBits::eGraphics &&
+                physicalDevices[i].getSurfaceSupportKHR(j, surface.get())) {
                 existsGraphicsQueue = true;
                 graphicsQueueFamilyIndex = j;
                 break;
@@ -79,7 +80,7 @@ int main() {
     }
 
     if (!existsSuitablePhysicalDevice) {
-        std::cerr << "使用可能な物理デバイスがありません。" << std::endl;
+        std::cerr << "error" << std::endl;
         return -1;
     }
 
@@ -316,25 +317,29 @@ int main() {
     std::vector<vk::UniqueCommandBuffer> cmdBufs =
         device->allocateCommandBuffersUnique(cmdBufAllocInfo);
         
+    vk::SemaphoreCreateInfo semaphoreCreateInfo;
+
+    vk::UniqueSemaphore swapchainImgSemaphore, imgRenderedSemaphore;
+    swapchainImgSemaphore = device->createSemaphoreUnique(semaphoreCreateInfo);
+    imgRenderedSemaphore = device->createSemaphoreUnique(semaphoreCreateInfo);
+    
     vk::FenceCreateInfo fenceCreateInfo;
-    vk::UniqueFence swapchainImgFence = device->createFenceUnique(fenceCreateInfo);
+    fenceCreateInfo.flags = vk::FenceCreateFlagBits::eSignaled;
+
+    vk::UniqueFence imgRenderedFence = device->createFenceUnique(fenceCreateInfo);
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
-        device->resetFences({ swapchainImgFence.get() });
+        device->waitForFences({ imgRenderedFence.get()}, VK_TRUE, UINT64_MAX);
+        device->resetFences({ imgRenderedFence.get() });
 
-        vk::ResultValue acquireImgResult = device->acquireNextImageKHR(swapchain.get(), 1'000'000'000, {}, swapchainImgFence.get());
+        vk::ResultValue acquireImgResult = device->acquireNextImageKHR(swapchain.get(), 1'000'000'000, swapchainImgSemaphore.get());
         if (acquireImgResult.result != vk::Result::eSuccess) {
-            std::cerr << "次フレームの取得に失敗しました。" << std::endl;
+            std::cerr << "error" << std::endl;
             return -1;
         }
         uint32_t imgIndex = acquireImgResult.value;
-
-        if (device->waitForFences({ swapchainImgFence.get() }, VK_TRUE, 1'000'000'000) != vk::Result::eSuccess) {
-            std::cerr << "次フレームの取得に失敗しました。" << std::endl;
-            return -1;
-        }
 
         cmdBufs[0]->reset();
 
@@ -367,11 +372,36 @@ int main() {
         vk::SubmitInfo submitInfo;
         submitInfo.commandBufferCount = 1;
         submitInfo.pCommandBuffers = submitCmdBuf;
-        graphicsQueue.submit({ submitInfo }, nullptr);
 
-        graphicsQueue.waitIdle();
+        vk::Semaphore renderwaitSemaphores[] = { swapchainImgSemaphore.get() };
+        vk::PipelineStageFlags renderwaitStages[] = { vk::PipelineStageFlagBits::eColorAttachmentOutput };
+        submitInfo.waitSemaphoreCount = 1;
+        submitInfo.pWaitSemaphores = renderwaitSemaphores;
+        submitInfo.pWaitDstStageMask = renderwaitStages;
+
+        vk::Semaphore renderSignalSemaphores[] = { imgRenderedSemaphore.get() };
+        submitInfo.signalSemaphoreCount = 1;
+        submitInfo.pSignalSemaphores = renderSignalSemaphores;
+
+        graphicsQueue.submit({ submitInfo }, imgRenderedFence.get());
+
+        vk::PresentInfoKHR presentInfo;
+
+        auto presentSwapchains = { swapchain.get() };
+        auto imgIndices = { imgIndex };
+
+        presentInfo.swapchainCount = presentSwapchains.size();
+        presentInfo.pSwapchains = presentSwapchains.begin();
+        presentInfo.pImageIndices = imgIndices.begin();
+
+        vk::Semaphore presenWaitSemaphores[] = { imgRenderedSemaphore.get() };
+        presentInfo.waitSemaphoreCount = 1;
+        presentInfo.pWaitSemaphores = presenWaitSemaphores;
+
+        graphicsQueue.presentKHR(presentInfo);
     }
 
+    graphicsQueue.waitIdle();
     glfwTerminate();
     return 0;
 }
