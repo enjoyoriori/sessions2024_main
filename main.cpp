@@ -2,6 +2,7 @@
 #include <vector>
 #include <fstream>
 #include <filesystem>
+#include <cstring>
 #include <vulkan/vulkan.hpp>
 #include <GLFW/glfw3.h>
 
@@ -10,6 +11,56 @@
 
 const uint32_t screenWidth = 1920;
 const uint32_t screenHeight = 1080;
+
+bool memoryChecker(vk::PhysicalDeviceMemoryProperties memProps, vk::MemoryRequirements memReq, vk::MemoryAllocateInfo& allocInfo) {
+    bool suitableMemoryTypeFound = false;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+        if (memReq.memoryTypeBits & (1 << i)) {
+            allocInfo.memoryTypeIndex = i;
+            suitableMemoryTypeFound = true;
+            break;
+        }
+    }
+    if (!suitableMemoryTypeFound) {
+        std::cerr << "適切なメモリタイプが存在しません。" << std::endl;
+    }
+        return suitableMemoryTypeFound;
+}
+
+bool memoryChecker(vk::PhysicalDeviceMemoryProperties memProps, vk::MemoryRequirements memReq, vk::MemoryAllocateInfo& allocInfo, vk::MemoryPropertyFlagBits memPropsFlag) {
+    bool suitableMemoryTypeFound = false;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+        if (memReq.memoryTypeBits & (1 << i) && (memProps.memoryTypes[i].propertyFlags & memPropsFlag)) {
+            allocInfo.memoryTypeIndex = i;
+            suitableMemoryTypeFound = true;
+            break;
+        }
+    }
+    if (!suitableMemoryTypeFound) {
+        std::cerr << "適切なメモリタイプが存在しません。" << std::endl;
+    }
+        return suitableMemoryTypeFound;
+}
+
+struct Vec2 {
+    float x, y;
+};
+
+struct Vec3 {
+    float x, y, z;
+};
+
+struct Vertex {
+    Vec3 pos;
+    Vec3 color;
+    Vec3 normal;
+};
+
+std::vector<Vertex> vertices = {
+    Vertex{ Vec3{  0.0f, -0.5f, 0.0f } },
+    Vertex{ Vec3{  0.5f,  0.5f, 0.0f } },
+    Vertex{ Vec3{ -0.5f,  0.5f, 0.0f } }
+};
 
 int main() {
 
@@ -132,6 +183,70 @@ int main() {
 
     //キューの取得
     vk::Queue graphicsQueue = device->getQueue(graphicsQueueFamilyIndex, 0);
+
+    //頂点バッファの作成
+    vk::BufferCreateInfo vertBufferCreateInfo;
+    vertBufferCreateInfo.size = sizeof(Vertex) * vertices.size();
+    vertBufferCreateInfo.usage = vk::BufferUsageFlagBits::eVertexBuffer;
+    vertBufferCreateInfo.sharingMode = vk::SharingMode::eExclusive;
+
+    vk::UniqueBuffer vertexBuf = device->createBufferUnique(vertBufferCreateInfo);
+
+    //バッファのメモリ割り当て
+    vk::PhysicalDeviceMemoryProperties memProps = physicalDevice.getMemoryProperties();
+
+    vk::MemoryRequirements vertexBufMemReq = device->getBufferMemoryRequirements(vertexBuf.get());
+
+    vk::MemoryAllocateInfo vertexBufMemAllocInfo;
+    vertexBufMemAllocInfo.allocationSize = vertexBufMemReq.size;
+
+    if (!memoryChecker(memProps, vertexBufMemReq, vertexBufMemAllocInfo, vk::MemoryPropertyFlagBits::eHostVisible)) {
+        return -1;
+    }
+
+    vk::UniqueDeviceMemory vertexBufMemory = device->allocateMemoryUnique(vertexBufMemAllocInfo);
+
+    device->bindBufferMemory(vertexBuf.get(), vertexBufMemory.get(), 0);
+
+    //メモリマッピング
+
+    void* vertexBufMem = device->mapMemory(vertexBufMemory.get(), 0, vertexBufMemReq.size);         //sizeof(Vertex) * vertices.size());でやったらエラーでた
+
+    std::memcpy(vertexBufMem, vertices.data(), vertexBufMemReq.size);
+
+    vk::MappedMemoryRange flushMemoryRange;
+    flushMemoryRange.memory = vertexBufMemory.get();
+    flushMemoryRange.offset = 0;
+    flushMemoryRange.size = vertexBufMemReq.size;
+
+    device->flushMappedMemoryRanges({ flushMemoryRange });
+
+    device->unmapMemory(vertexBufMemory.get());
+
+    //頂点入力バインディングデスクリプション
+
+    vk::VertexInputBindingDescription vertexBindingDescription[1];
+    vertexBindingDescription[0].binding = 0;
+    vertexBindingDescription[0].stride = sizeof(Vertex);
+    vertexBindingDescription[0].inputRate = vk::VertexInputRate::eVertex;
+
+    //頂点入力アトリビュートデスクリプション
+
+    vk::VertexInputAttributeDescription vertexInputDescription[3];
+    vertexInputDescription[0].binding = 0;
+    vertexInputDescription[0].location = 0;
+    vertexInputDescription[0].format = vk::Format::eR32G32B32Sfloat;
+    vertexInputDescription[0].offset = offsetof(Vertex, pos);
+
+    vertexInputDescription[1].binding = 0;
+    vertexInputDescription[1].location = 1;
+    vertexInputDescription[1].format = vk::Format::eR32G32B32Sfloat;
+    vertexInputDescription[1].offset = offsetof(Vertex, color);
+
+    vertexInputDescription[2].binding = 0;
+    vertexInputDescription[2].location = 2;
+    vertexInputDescription[2].format = vk::Format::eR32G32B32Sfloat;
+    vertexInputDescription[2].offset = offsetof(Vertex, normal);
 
     //スワップチェインの作成
 
@@ -312,10 +427,10 @@ int main() {
     viewportState.pScissors = scissors;
 
     vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
-    vertexInputInfo.vertexAttributeDescriptionCount = 0;
-    vertexInputInfo.pVertexAttributeDescriptions = nullptr;
-    vertexInputInfo.vertexBindingDescriptionCount = 0;
-    vertexInputInfo.pVertexBindingDescriptions = nullptr;
+    vertexInputInfo.vertexAttributeDescriptionCount = 3;
+    vertexInputInfo.pVertexAttributeDescriptions = vertexInputDescription;
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions = vertexBindingDescription;
 
     vk::PipelineInputAssemblyStateCreateInfo inputAssembly;
     inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
@@ -505,7 +620,8 @@ int main() {
             // ここでサブパス0番の処理
 
         cmdBufs[0]->bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.get());
-        cmdBufs[0]->draw(3, 1, 0, 0);
+        cmdBufs[0]->bindVertexBuffers(0, { vertexBuf.get() }, { 0 });
+        cmdBufs[0]->draw(vertices.size(), 1, 0, 0);
 
         cmdBufs[0]->endRenderPass();
 
