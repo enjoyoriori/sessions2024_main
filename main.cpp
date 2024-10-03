@@ -57,9 +57,12 @@ struct Vertex {
 };
 
 std::vector<Vertex> vertices = {
-    Vertex{ Vec3{  0.0f, -0.5f, 0.0f } },
-    Vertex{ Vec3{  0.5f,  0.5f, 0.0f } },
-    Vertex{ Vec3{ -0.5f,  0.5f, 0.0f } }
+    Vertex{ Vec3{-0.5f, -0.5f, 0.0f }, Vec3{ 0.0, 0.0, 1.0 } },
+    Vertex{ Vec3{ 0.5f,  0.5f, 0.0f }, Vec3{ 0.0, 1.0, 0.0 } },
+    Vertex{ Vec3{-0.5f,  0.5f, 0.0f }, Vec3{ 1.0, 0.0, 0.0 } },
+    Vertex{ Vec3{ 0.5f,  0.5f, 0.0f }, Vec3{ 0.0, 1.0, 0.0 } },
+    Vertex{ Vec3{-0.5f, -0.5f, 0.0f }, Vec3{ 0.0, 0.0, 1.0 } },
+    Vertex{ Vec3{ 0.5f, -0.5f, 0.0f }, Vec3{ 1.0, 1.0, 1.0 } },
 };
 
 int main() {
@@ -185,43 +188,106 @@ int main() {
     vk::Queue graphicsQueue = device->getQueue(graphicsQueueFamilyIndex, 0);
 
     //頂点バッファの作成
+
     vk::BufferCreateInfo vertBufferCreateInfo;
     vertBufferCreateInfo.size = sizeof(Vertex) * vertices.size();
-    vertBufferCreateInfo.usage = vk::BufferUsageFlagBits::eVertexBuffer;
+    vertBufferCreateInfo.usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst;
     vertBufferCreateInfo.sharingMode = vk::SharingMode::eExclusive;
 
-    vk::UniqueBuffer vertexBuf = device->createBufferUnique(vertBufferCreateInfo);
+    vk::UniqueBuffer vertBuf = device->createBufferUnique(vertBufferCreateInfo);
 
-    //バッファのメモリ割り当て
-    vk::PhysicalDeviceMemoryProperties memProps = physicalDevice.getMemoryProperties();
+    //頂点バッファのメモリ割り当て
 
-    vk::MemoryRequirements vertexBufMemReq = device->getBufferMemoryRequirements(vertexBuf.get());
+    vk::MemoryRequirements vertBufMemReq = device->getBufferMemoryRequirements(vertBuf.get());
 
-    vk::MemoryAllocateInfo vertexBufMemAllocInfo;
-    vertexBufMemAllocInfo.allocationSize = vertexBufMemReq.size;
+    vk::PhysicalDeviceMemoryProperties vertMemProps = physicalDevice.getMemoryProperties();
 
-    if (!memoryChecker(memProps, vertexBufMemReq, vertexBufMemAllocInfo, vk::MemoryPropertyFlagBits::eHostVisible)) {
+    vk::MemoryAllocateInfo vertBufMemAllocInfo;
+    vertBufMemAllocInfo.allocationSize = vertBufMemReq.size;
+
+    if(!memoryChecker(vertMemProps, vertBufMemReq, vertBufMemAllocInfo, vk::MemoryPropertyFlagBits::eDeviceLocal)) {
         return -1;
     }
 
-    vk::UniqueDeviceMemory vertexBufMemory = device->allocateMemoryUnique(vertexBufMemAllocInfo);
+    vk::UniqueDeviceMemory vertBufMemory = device->allocateMemoryUnique(vertBufMemAllocInfo);
 
-    device->bindBufferMemory(vertexBuf.get(), vertexBufMemory.get(), 0);
+    device->bindBufferMemory(vertBuf.get(), vertBufMemory.get(), 0);
 
-    //メモリマッピング
+    //頂点バッファのステージングバッファの作成
+    vk::BufferCreateInfo stagingBufferCreateInfo;
+    stagingBufferCreateInfo.size = sizeof(Vertex) * vertices.size();
+    stagingBufferCreateInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+    stagingBufferCreateInfo.sharingMode = vk::SharingMode::eExclusive;
 
-    void* vertexBufMem = device->mapMemory(vertexBufMemory.get(), 0, vertexBufMemReq.size);         //sizeof(Vertex) * vertices.size());でやったらエラーでた
+    vk::UniqueBuffer stagingBuf = device->createBufferUnique(stagingBufferCreateInfo);
 
-    std::memcpy(vertexBufMem, vertices.data(), vertexBufMemReq.size);
+    //ステージングバッファのメモリ割り当て
+    vk::PhysicalDeviceMemoryProperties memProps = physicalDevice.getMemoryProperties();
+
+    vk::MemoryRequirements stagingBufMemReq = device->getBufferMemoryRequirements(stagingBuf.get());
+
+    vk::MemoryAllocateInfo stagingBufMemAllocInfo;
+    stagingBufMemAllocInfo.allocationSize = stagingBufMemReq.size;
+
+    if (!memoryChecker(memProps, stagingBufMemReq, stagingBufMemAllocInfo, vk::MemoryPropertyFlagBits::eHostVisible)) {
+        return -1;
+    }
+
+    vk::UniqueDeviceMemory stagingBufMemory = device->allocateMemoryUnique(stagingBufMemAllocInfo);
+
+    device->bindBufferMemory(stagingBuf.get(), stagingBufMemory.get(), 0);
+
+    //ステージングバッファのメモリマッピング
+
+    void* stagingBufMem = device->mapMemory(stagingBufMemory.get(), 0, stagingBufMemReq.size);         //sizeof(Vertex) * vertices.size());でやったらエラーでた
+
+    std::memcpy(stagingBufMem, vertices.data(), stagingBufMemReq.size);
 
     vk::MappedMemoryRange flushMemoryRange;
-    flushMemoryRange.memory = vertexBufMemory.get();
+    flushMemoryRange.memory = stagingBufMemory.get();
     flushMemoryRange.offset = 0;
-    flushMemoryRange.size = vertexBufMemReq.size;
+    flushMemoryRange.size = stagingBufMemReq.size;
 
     device->flushMappedMemoryRanges({ flushMemoryRange });
 
-    device->unmapMemory(vertexBufMemory.get());
+    device->unmapMemory(stagingBufMemory.get());
+
+    //コマンドバッファの作成
+
+    vk::CommandPoolCreateInfo tmpCmdPoolCreateInfo;
+    tmpCmdPoolCreateInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
+    tmpCmdPoolCreateInfo.flags = vk::CommandPoolCreateFlagBits::eTransient;
+    vk::UniqueCommandPool tmpCmdPool = device->createCommandPoolUnique(tmpCmdPoolCreateInfo);
+
+    vk::CommandBufferAllocateInfo tmpCmdBufAllocInfo;
+    tmpCmdBufAllocInfo.commandPool = tmpCmdPool.get();
+    tmpCmdBufAllocInfo.commandBufferCount = 1;
+    tmpCmdBufAllocInfo.level = vk::CommandBufferLevel::ePrimary;
+    std::vector<vk::UniqueCommandBuffer> tmpCmdBufs = device->allocateCommandBuffersUnique(tmpCmdBufAllocInfo);
+
+    //データ転送命令
+
+    vk::BufferCopy bufCopy;
+    bufCopy.srcOffset = 0;
+    bufCopy.dstOffset = 0;
+    bufCopy.size = stagingBufMemReq.size;
+
+    vk::CommandBufferBeginInfo cmdBeginInfo;
+    cmdBeginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+
+    tmpCmdBufs[0]->begin(cmdBeginInfo);
+    tmpCmdBufs[0]->copyBuffer(stagingBuf.get(), vertBuf.get(), {bufCopy});
+    tmpCmdBufs[0]->end();
+
+    //キューでの取得
+
+    vk::CommandBuffer submitCmdBuf[1] = {tmpCmdBufs[0].get()};
+    vk::SubmitInfo submitInfo;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = submitCmdBuf;
+
+    graphicsQueue.submit({submitInfo});
+    graphicsQueue.waitIdle();
 
     //頂点入力バインディングデスクリプション
 
@@ -620,7 +686,7 @@ int main() {
             // ここでサブパス0番の処理
 
         cmdBufs[0]->bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.get());
-        cmdBufs[0]->bindVertexBuffers(0, { vertexBuf.get() }, { 0 });
+        cmdBufs[0]->bindVertexBuffers(0, { vertBuf.get() }, { 0 });
         cmdBufs[0]->draw(vertices.size(), 1, 0, 0);
 
         cmdBufs[0]->endRenderPass();
