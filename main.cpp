@@ -62,7 +62,7 @@ struct SceeneData {
 
 struct Object {
     std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
+    std::vector<uint16_t> indices;
     Vec3 pos;
     Vec3 rot;
     Vec3 scale;
@@ -72,10 +72,10 @@ std::vector<Vertex> vertices = {
     Vertex{ Vec3{-0.5f, -0.5f, 0.0f }, Vec3{ 0.0, 0.0, 1.0 } },
     Vertex{ Vec3{ 0.5f,  0.5f, 0.0f }, Vec3{ 0.0, 1.0, 0.0 } },
     Vertex{ Vec3{-0.5f,  0.5f, 0.0f }, Vec3{ 1.0, 0.0, 0.0 } },
-    Vertex{ Vec3{ 0.5f,  0.5f, 0.0f }, Vec3{ 0.0, 1.0, 0.0 } },
-    Vertex{ Vec3{-0.5f, -0.5f, 0.0f }, Vec3{ 0.0, 0.0, 1.0 } },
     Vertex{ Vec3{ 0.5f, -0.5f, 0.0f }, Vec3{ 1.0, 1.0, 1.0 } },
 };
+
+std::vector<uint16_t> indices = { 0, 1, 2, 1, 0, 3 };
 
 SceeneData sceneData = {
     Vec3{0.3f, -0.2f, 0.0f}
@@ -182,12 +182,12 @@ int main() {
     vk::DeviceCreateInfo devCreateInfo;
 
     auto devRequiredExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
-
+    
     devCreateInfo.enabledExtensionCount = devRequiredExtensions.size();
     devCreateInfo.ppEnabledExtensionNames = devRequiredExtensions.begin();
     devCreateInfo.enabledLayerCount = requiredLayers.size();
     devCreateInfo.ppEnabledLayerNames = requiredLayers.begin();
-
+    
     //キュー情報の作成
     vk::DeviceQueueCreateInfo queueCreateInfo[1];
     queueCreateInfo[0].queueFamilyIndex = graphicsQueueFamilyIndex;
@@ -204,7 +204,7 @@ int main() {
     vk::Queue graphicsQueue = device->getQueue(graphicsQueueFamilyIndex, 0);
 
     //頂点バッファの作成
-
+    
     vk::BufferCreateInfo vertBufferCreateInfo;
     vertBufferCreateInfo.size = sizeof(Vertex) * vertices.size();
     vertBufferCreateInfo.usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst;
@@ -228,85 +228,175 @@ int main() {
     vk::UniqueDeviceMemory vertBufMemory = device->allocateMemoryUnique(vertBufMemAllocInfo);
 
     device->bindBufferMemory(vertBuf.get(), vertBufMemory.get(), 0);
-
+    
     //頂点バッファのステージングバッファの作成
-    vk::BufferCreateInfo stagingBufferCreateInfo;
-    stagingBufferCreateInfo.size = sizeof(Vertex) * vertices.size();
-    stagingBufferCreateInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
-    stagingBufferCreateInfo.sharingMode = vk::SharingMode::eExclusive;
+    {
+        vk::BufferCreateInfo stagingBufferCreateInfo;
+        stagingBufferCreateInfo.size = sizeof(Vertex) * vertices.size();
+        stagingBufferCreateInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+        stagingBufferCreateInfo.sharingMode = vk::SharingMode::eExclusive;
 
-    vk::UniqueBuffer stagingBuf = device->createBufferUnique(stagingBufferCreateInfo);
+        vk::UniqueBuffer stagingBuf = device->createBufferUnique(stagingBufferCreateInfo);
 
-    //ステージングバッファのメモリ割り当て
-    vk::PhysicalDeviceMemoryProperties memProps = physicalDevice.getMemoryProperties();
+        //ステージングバッファのメモリ割り当て
+        vk::PhysicalDeviceMemoryProperties memProps = physicalDevice.getMemoryProperties();
 
-    vk::MemoryRequirements stagingBufMemReq = device->getBufferMemoryRequirements(stagingBuf.get());
+        vk::MemoryRequirements stagingBufMemReq = device->getBufferMemoryRequirements(stagingBuf.get());
 
-    vk::MemoryAllocateInfo stagingBufMemAllocInfo;
-    stagingBufMemAllocInfo.allocationSize = stagingBufMemReq.size;
+        vk::MemoryAllocateInfo stagingBufMemAllocInfo;
+        stagingBufMemAllocInfo.allocationSize = stagingBufMemReq.size;
 
-    if (!memoryChecker(memProps, stagingBufMemReq, stagingBufMemAllocInfo, vk::MemoryPropertyFlagBits::eHostVisible)) {
+        if (!memoryChecker(memProps, stagingBufMemReq, stagingBufMemAllocInfo, vk::MemoryPropertyFlagBits::eHostVisible)) {
+            return -1;
+        }
+
+        vk::UniqueDeviceMemory stagingBufMemory = device->allocateMemoryUnique(stagingBufMemAllocInfo);
+
+        device->bindBufferMemory(stagingBuf.get(), stagingBufMemory.get(), 0);
+
+        //ステージングバッファのメモリマッピング
+
+        void* stagingBufMem = device->mapMemory(stagingBufMemory.get(), 0, stagingBufMemReq.size);         //sizeof(Vertex) * vertices.size());でやったらエラーでた
+
+        std::memcpy(stagingBufMem, vertices.data(), stagingBufMemReq.size);
+
+        vk::MappedMemoryRange flushMemoryRange;
+        flushMemoryRange.memory = stagingBufMemory.get();
+        flushMemoryRange.offset = 0;
+        flushMemoryRange.size = stagingBufMemReq.size;
+
+        device->flushMappedMemoryRanges({ flushMemoryRange });
+
+        device->unmapMemory(stagingBufMemory.get());
+
+            //コマンドバッファの作成
+
+        vk::CommandPoolCreateInfo tmpCmdPoolCreateInfo;
+        tmpCmdPoolCreateInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
+        tmpCmdPoolCreateInfo.flags = vk::CommandPoolCreateFlagBits::eTransient;
+        vk::UniqueCommandPool tmpCmdPool = device->createCommandPoolUnique(tmpCmdPoolCreateInfo);
+
+        vk::CommandBufferAllocateInfo tmpCmdBufAllocInfo;
+        tmpCmdBufAllocInfo.commandPool = tmpCmdPool.get();
+        tmpCmdBufAllocInfo.commandBufferCount = 1;
+        tmpCmdBufAllocInfo.level = vk::CommandBufferLevel::ePrimary;
+        std::vector<vk::UniqueCommandBuffer> tmpCmdBufs = device->allocateCommandBuffersUnique(tmpCmdBufAllocInfo);
+
+        //データ転送命令
+
+        vk::BufferCopy bufCopy;
+        bufCopy.srcOffset = 0;
+        bufCopy.dstOffset = 0;
+        bufCopy.size = stagingBufMemReq.size;
+
+        vk::CommandBufferBeginInfo cmdBeginInfo;
+        cmdBeginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+
+        tmpCmdBufs[0]->begin(cmdBeginInfo);
+        tmpCmdBufs[0]->copyBuffer(stagingBuf.get(), vertBuf.get(), {bufCopy});
+        tmpCmdBufs[0]->end();
+
+        //キューでの取得
+
+        vk::CommandBuffer submitCmdBuf[1] = {tmpCmdBufs[0].get()};
+        vk::SubmitInfo submitInfo;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = submitCmdBuf;
+
+        graphicsQueue.submit({submitInfo});
+        graphicsQueue.waitIdle();
+    }
+    //インデックスバッファの作成
+    
+    vk::BufferCreateInfo indexBufferCreateInfo;
+    indexBufferCreateInfo.size = sizeof(uint16_t) * indices.size();
+    indexBufferCreateInfo.usage = vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst;    // ここだけ注意
+    indexBufferCreateInfo.sharingMode = vk::SharingMode::eExclusive;
+
+    vk::UniqueBuffer indexBuf = device->createBufferUnique(indexBufferCreateInfo);
+
+    vk::MemoryRequirements indexBufMemReq = device->getBufferMemoryRequirements(indexBuf.get());
+        
+    vk::MemoryAllocateInfo indexBufMemAllocInfo;
+    indexBufMemAllocInfo.allocationSize = indexBufMemReq.size;
+
+    if (!memoryChecker(physicalDevice.getMemoryProperties(), indexBufMemReq, indexBufMemAllocInfo, vk::MemoryPropertyFlagBits::eHostVisible)) {
         return -1;
     }
 
-    vk::UniqueDeviceMemory stagingBufMemory = device->allocateMemoryUnique(stagingBufMemAllocInfo);
+    vk::UniqueDeviceMemory indexBufMemory = device->allocateMemoryUnique(indexBufMemAllocInfo);
 
-    device->bindBufferMemory(stagingBuf.get(), stagingBufMemory.get(), 0);
+    device->bindBufferMemory(indexBuf.get(), indexBufMemory.get(), 0);
+    
+    //インデックスバッファのステージングバッファの作成
+    {
+        vk::BufferCreateInfo stagingBufferCreateInfo;
+        stagingBufferCreateInfo.size = sizeof(uint16_t) * indices.size();
+        stagingBufferCreateInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+        stagingBufferCreateInfo.sharingMode = vk::SharingMode::eExclusive;
 
-    //ステージングバッファのメモリマッピング
+        vk::UniqueBuffer stagingBuf = device->createBufferUnique(stagingBufferCreateInfo);
 
-    void* stagingBufMem = device->mapMemory(stagingBufMemory.get(), 0, stagingBufMemReq.size);         //sizeof(Vertex) * vertices.size());でやったらエラーでた
+        vk::MemoryRequirements stagingBufMemReq = device->getBufferMemoryRequirements(stagingBuf.get());
 
-    std::memcpy(stagingBufMem, vertices.data(), stagingBufMemReq.size);
+        vk::MemoryAllocateInfo stagingBufMemAllocInfo;
+        stagingBufMemAllocInfo.allocationSize = stagingBufMemReq.size;
 
-    vk::MappedMemoryRange flushMemoryRange;
-    flushMemoryRange.memory = stagingBufMemory.get();
-    flushMemoryRange.offset = 0;
-    flushMemoryRange.size = stagingBufMemReq.size;
+        if (!memoryChecker(physicalDevice.getMemoryProperties(), stagingBufMemReq, stagingBufMemAllocInfo, vk::MemoryPropertyFlagBits::eHostVisible)) {
+            return -1;
+        }
 
-    device->flushMappedMemoryRanges({ flushMemoryRange });
+        vk::UniqueDeviceMemory stagingBufMemory = device->allocateMemoryUnique(stagingBufMemAllocInfo);
 
-    device->unmapMemory(stagingBufMemory.get());
+        device->bindBufferMemory(stagingBuf.get(), stagingBufMemory.get(), 0);
 
-    //コマンドバッファの作成
+        void *pStagingBufMem = device->mapMemory(stagingBufMemory.get(), 0, stagingBufMemReq.size);
 
-    vk::CommandPoolCreateInfo tmpCmdPoolCreateInfo;
-    tmpCmdPoolCreateInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
-    tmpCmdPoolCreateInfo.flags = vk::CommandPoolCreateFlagBits::eTransient;
-    vk::UniqueCommandPool tmpCmdPool = device->createCommandPoolUnique(tmpCmdPoolCreateInfo);
+        std::memcpy(pStagingBufMem, indices.data(), stagingBufMemReq.size);
 
-    vk::CommandBufferAllocateInfo tmpCmdBufAllocInfo;
-    tmpCmdBufAllocInfo.commandPool = tmpCmdPool.get();
-    tmpCmdBufAllocInfo.commandBufferCount = 1;
-    tmpCmdBufAllocInfo.level = vk::CommandBufferLevel::ePrimary;
-    std::vector<vk::UniqueCommandBuffer> tmpCmdBufs = device->allocateCommandBuffersUnique(tmpCmdBufAllocInfo);
+        vk::MappedMemoryRange flushMemoryRange;
+        flushMemoryRange.memory = stagingBufMemory.get();
+        flushMemoryRange.offset = 0;
+        flushMemoryRange.size = stagingBufMemReq.size;
 
-    //データ転送命令
+        device->flushMappedMemoryRanges({flushMemoryRange});
 
-    vk::BufferCopy bufCopy;
-    bufCopy.srcOffset = 0;
-    bufCopy.dstOffset = 0;
-    bufCopy.size = stagingBufMemReq.size;
+        device->unmapMemory(stagingBufMemory.get());
 
-    vk::CommandBufferBeginInfo cmdBeginInfo;
-    cmdBeginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+        vk::CommandPoolCreateInfo tmpCmdPoolCreateInfo;
+        tmpCmdPoolCreateInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
+        tmpCmdPoolCreateInfo.flags = vk::CommandPoolCreateFlagBits::eTransient;
+        vk::UniqueCommandPool tmpCmdPool = device->createCommandPoolUnique(tmpCmdPoolCreateInfo);
 
-    tmpCmdBufs[0]->begin(cmdBeginInfo);
-    tmpCmdBufs[0]->copyBuffer(stagingBuf.get(), vertBuf.get(), {bufCopy});
-    tmpCmdBufs[0]->end();
+        vk::CommandBufferAllocateInfo tmpCmdBufAllocInfo;
+        tmpCmdBufAllocInfo.commandPool = tmpCmdPool.get();
+        tmpCmdBufAllocInfo.commandBufferCount = 1;
+        tmpCmdBufAllocInfo.level = vk::CommandBufferLevel::ePrimary;
+        std::vector<vk::UniqueCommandBuffer> tmpCmdBufs = device->allocateCommandBuffersUnique(tmpCmdBufAllocInfo);
 
-    //キューでの取得
+        vk::BufferCopy bufCopy;
+        bufCopy.srcOffset = 0;
+        bufCopy.dstOffset = 0;
+        bufCopy.size = sizeof(uint16_t) * indices.size();
 
-    vk::CommandBuffer submitCmdBuf[1] = {tmpCmdBufs[0].get()};
-    vk::SubmitInfo submitInfo;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = submitCmdBuf;
+        vk::CommandBufferBeginInfo cmdBeginInfo;
+        cmdBeginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
 
-    graphicsQueue.submit({submitInfo});
-    graphicsQueue.waitIdle();
+        tmpCmdBufs[0]->begin(cmdBeginInfo);
+        tmpCmdBufs[0]->copyBuffer(stagingBuf.get(), indexBuf.get(), {bufCopy});
+        tmpCmdBufs[0]->end();
+
+        vk::CommandBuffer submitCmdBuf[1] = {tmpCmdBufs[0].get()};
+        vk::SubmitInfo submitInfo;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = submitCmdBuf;
+
+        graphicsQueue.submit({submitInfo});
+        graphicsQueue.waitIdle();
+    }
 
     //ユニフォームバッファの作成
-
+    
     vk::BufferCreateInfo uniformBufferCreateInfo;
     uniformBufferCreateInfo.size = sizeof(sceneData);
     uniformBufferCreateInfo.usage = vk::BufferUsageFlagBits::eUniformBuffer;
@@ -342,9 +432,9 @@ int main() {
     device->flushMappedMemoryRanges({ uniformBufMemoryRange });
 
     device->unmapMemory(uniformBufMemory.get());
-
+    
     //デスクリプタセットの作成
-
+    
     vk::DescriptorSetLayoutBinding descSetLayoutBinding[1];
     descSetLayoutBinding[0].binding = 0;
     descSetLayoutBinding[0].descriptorType = vk::DescriptorType::eUniformBuffer;
@@ -364,6 +454,7 @@ int main() {
     descPoolSize[0].descriptorCount = 1;
 
     vk::DescriptorPoolCreateInfo descPoolCreateInfo;
+    descPoolCreateInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
     descPoolCreateInfo.poolSizeCount = 1;
     descPoolCreateInfo.pPoolSizes = descPoolSize;
     descPoolCreateInfo.maxSets = 1;
@@ -399,7 +490,7 @@ int main() {
     writeDescSet.pBufferInfo = descBufInfo;
 
     device->updateDescriptorSets({ writeDescSet }, {});
-
+    
     //頂点入力バインディングデスクリプション
 
     vk::VertexInputBindingDescription vertexBindingDescription[1];
@@ -801,9 +892,10 @@ int main() {
 
         cmdBufs[0]->bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.get());
         cmdBufs[0]->bindVertexBuffers(0, { vertBuf.get() }, { 0 });
+        cmdBufs[0]->bindIndexBuffer(indexBuf.get(), 0, vk::IndexType::eUint16);
         cmdBufs[0]->bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout.get(), 0, { descSets[0].get() }, {});   //デスクリプタセットのバインド
 
-        cmdBufs[0]->draw(vertices.size(), 1, 0, 0);
+        cmdBufs[0]->drawIndexed(indices.size(), 1, 0, 0, 0);
 
         cmdBufs[0]->endRenderPass();
 
