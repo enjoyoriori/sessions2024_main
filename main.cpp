@@ -56,6 +56,18 @@ struct Vertex {
     Vec3 normal;
 };
 
+struct SceeneData {
+    Vec3 Center;
+};
+
+struct Object {
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+    Vec3 pos;
+    Vec3 rot;
+    Vec3 scale;
+};
+
 std::vector<Vertex> vertices = {
     Vertex{ Vec3{-0.5f, -0.5f, 0.0f }, Vec3{ 0.0, 0.0, 1.0 } },
     Vertex{ Vec3{ 0.5f,  0.5f, 0.0f }, Vec3{ 0.0, 1.0, 0.0 } },
@@ -63,6 +75,10 @@ std::vector<Vertex> vertices = {
     Vertex{ Vec3{ 0.5f,  0.5f, 0.0f }, Vec3{ 0.0, 1.0, 0.0 } },
     Vertex{ Vec3{-0.5f, -0.5f, 0.0f }, Vec3{ 0.0, 0.0, 1.0 } },
     Vertex{ Vec3{ 0.5f, -0.5f, 0.0f }, Vec3{ 1.0, 1.0, 1.0 } },
+};
+
+SceeneData sceneData = {
+    Vec3{0.3f, -0.2f, 0.0f}
 };
 
 int main() {
@@ -288,6 +304,101 @@ int main() {
 
     graphicsQueue.submit({submitInfo});
     graphicsQueue.waitIdle();
+
+    //ユニフォームバッファの作成
+
+    vk::BufferCreateInfo uniformBufferCreateInfo;
+    uniformBufferCreateInfo.size = sizeof(sceneData);
+    uniformBufferCreateInfo.usage = vk::BufferUsageFlagBits::eUniformBuffer;
+    uniformBufferCreateInfo.sharingMode = vk::SharingMode::eExclusive;
+
+    vk::UniqueBuffer uniformBuf = device->createBufferUnique(uniformBufferCreateInfo);
+
+    vk::MemoryRequirements uniformBufMemReq = device->getBufferMemoryRequirements(uniformBuf.get());
+
+    vk::MemoryAllocateInfo uniformBufMemAllocInfo;
+    vk::PhysicalDeviceMemoryProperties uniformMemProps = physicalDevice.getMemoryProperties();
+    uniformBufMemAllocInfo.allocationSize = uniformBufMemReq.size;
+
+    if (!memoryChecker(uniformMemProps, uniformBufMemReq, uniformBufMemAllocInfo, vk::MemoryPropertyFlagBits::eHostVisible)) {
+        return -1;
+    }
+
+    vk::UniqueDeviceMemory uniformBufMemory = device->allocateMemoryUnique(uniformBufMemAllocInfo);
+
+    device->bindBufferMemory(uniformBuf.get(), uniformBufMemory.get(), 0);
+
+    //メモリマッピング
+
+    void* pUniformBufMem = device->mapMemory(uniformBufMemory.get(), 0, uniformBufMemReq.size);
+
+    std::memcpy(pUniformBufMem, &sceneData, uniformBufMemReq.size);
+
+    vk::MappedMemoryRange uniformBufMemoryRange;
+    uniformBufMemoryRange.memory = uniformBufMemory.get();
+    uniformBufMemoryRange.offset = 0;
+    uniformBufMemoryRange.size = uniformBufMemReq.size;
+
+    device->flushMappedMemoryRanges({ uniformBufMemoryRange });
+
+    device->unmapMemory(uniformBufMemory.get());
+
+    //デスクリプタセットの作成
+
+    vk::DescriptorSetLayoutBinding descSetLayoutBinding[1];
+    descSetLayoutBinding[0].binding = 0;
+    descSetLayoutBinding[0].descriptorType = vk::DescriptorType::eUniformBuffer;
+    descSetLayoutBinding[0].descriptorCount = 1;
+    descSetLayoutBinding[0].stageFlags = vk::ShaderStageFlagBits::eVertex;
+
+    vk::DescriptorSetLayoutCreateInfo descSetLayoutCreateInfo{};
+    descSetLayoutCreateInfo.bindingCount = 1;
+    descSetLayoutCreateInfo.pBindings = descSetLayoutBinding;
+
+    vk::UniqueDescriptorSetLayout descSetLayout = device->createDescriptorSetLayoutUnique(descSetLayoutCreateInfo);
+
+    //デスクリプタプールの作成
+
+    vk::DescriptorPoolSize descPoolSize[1];
+    descPoolSize[0].type = vk::DescriptorType::eUniformBuffer;
+    descPoolSize[0].descriptorCount = 1;
+
+    vk::DescriptorPoolCreateInfo descPoolCreateInfo;
+    descPoolCreateInfo.poolSizeCount = 1;
+    descPoolCreateInfo.pPoolSizes = descPoolSize;
+    descPoolCreateInfo.maxSets = 1;
+
+    vk::UniqueDescriptorPool descPool = device->createDescriptorPoolUnique(descPoolCreateInfo);
+
+    //デスクリプタセットの作成
+
+    vk::DescriptorSetAllocateInfo descSetAllocInfo;
+
+    auto descSetLayouts = { descSetLayout.get() };
+
+    descSetAllocInfo.descriptorPool = descPool.get();
+    descSetAllocInfo.descriptorSetCount = descSetLayouts.size();
+    descSetAllocInfo.pSetLayouts = descSetLayouts.begin();
+
+    std::vector<vk::UniqueDescriptorSet> descSets = device->allocateDescriptorSetsUnique(descSetAllocInfo);
+
+    //デスクリプタの更新
+
+    vk::WriteDescriptorSet writeDescSet;
+    writeDescSet.dstSet = descSets[0].get();
+    writeDescSet.dstBinding = 0;
+    writeDescSet.dstArrayElement = 0;
+    writeDescSet.descriptorType = vk::DescriptorType::eUniformBuffer;
+
+    vk::DescriptorBufferInfo descBufInfo[1];
+    descBufInfo[0].buffer = uniformBuf.get();
+    descBufInfo[0].offset = 0;
+    descBufInfo[0].range = sizeof(sceneData);
+
+    writeDescSet.descriptorCount = 1;
+    writeDescSet.pBufferInfo = descBufInfo;
+
+    device->updateDescriptorSets({ writeDescSet }, {});
 
     //頂点入力バインディングデスクリプション
 
@@ -528,9 +639,12 @@ int main() {
     blend.attachmentCount = 1;
     blend.pAttachments = blendattachment;
 
+    //デスクリプタセットレイアウトをパイプラインに設定
+    auto pipelineDescSetLayouts = { descSetLayout.get() };
+
     vk::PipelineLayoutCreateInfo layoutCreateInfo;
-    layoutCreateInfo.setLayoutCount = 0;
-    layoutCreateInfo.pSetLayouts = nullptr;
+    layoutCreateInfo.setLayoutCount = pipelineDescSetLayouts.size();
+    layoutCreateInfo.pSetLayouts = pipelineDescSetLayouts.begin();
 
     vk::UniquePipelineLayout pipelineLayout = device->createPipelineLayoutUnique(layoutCreateInfo);
 
@@ -687,6 +801,8 @@ int main() {
 
         cmdBufs[0]->bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.get());
         cmdBufs[0]->bindVertexBuffers(0, { vertBuf.get() }, { 0 });
+        cmdBufs[0]->bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout.get(), 0, { descSets[0].get() }, {});   //デスクリプタセットのバインド
+
         cmdBufs[0]->draw(vertices.size(), 1, 0, 0);
 
         cmdBufs[0]->endRenderPass();
