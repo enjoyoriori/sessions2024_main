@@ -141,17 +141,19 @@ std::vector<Object> loadObjectsFromCSV(const std::string& filename) {
             //std::cout << "Vertex: " << vertex.pos.x << ", " << vertex.pos.y << ", " << vertex.pos.z << std::endl;
             obj.vertices.push_back(vertex);
         }
-
         // インデックスデータの読み込み
-        for (int i = 0; i < numIndices; ++i) {
+        for (int i = 0; i < numIndices; i++) {
             std::getline(file, line);
             std::stringstream indexStream(line);
-            uint16_t index;
-            indexStream >> token;
-            while (std::getline(indexStream, token, ',')) {
-                obj.indices.push_back(static_cast<uint16_t>(std::stoi(token)));
+            std::string s;
+            std::vector<std::string> indexData;
+            while (std::getline(indexStream, s, ',')) {
+                indexData.push_back(s);
             }
-            std::cout << "Index: " << obj.indices.at(i) << std::endl;
+            for(int j = 1;j<indexData.size();j++){
+                obj.indices.push_back(std::stoi(indexData.at(j)));
+                std::cout << "Index: " << obj.indices.at(i*3+j-1) << std::endl;
+            }
         }
 
         // キーフレームデータの読み込み
