@@ -3,6 +3,8 @@
 #include <map>
 #include <fstream>
 #include <filesystem>
+#include <string>
+#include <sstream>
 #include <cstring>
 #include <chrono>
 #include <thread>
@@ -94,10 +96,82 @@ struct Object {
 };
 
 struct Camera {
-    std::vector<Transform> viewMatrices;
-    std::vector<Transform> projectionMatrices;
+    std::vector<glm::mat4> viewMatrices;
+    std::vector<glm::mat4> projectionMatrices;
     std::map<uint32_t,KeyFrame> keyframes;
 };
+
+std::vector<Object> loadObjectsFromCSV(const std::string& filename) {
+    std::ifstream file(filename);
+    std::string line;
+    std::vector<Object> objects;
+
+    if (!file.is_open()) {
+        std::cerr << "ファイルを開くことができませんでした: " << filename << std::endl;
+        return objects;
+    }
+
+    std::string token;
+
+    // 数値データの読み込み
+    int numObjects;
+    file >> numObjects;
+    
+    std::cout << "Object: " << numObjects << std::endl;
+    fflush(stdout);
+
+    for(int i = 0;i < numObjects; i++){
+
+        int numVertices, numIndices, numKeyFrames;
+        file >> numVertices >> numIndices >> numKeyFrames;
+        std::cout << "Vertices: " << numVertices << ", Indices: " << numIndices << ", KeyFrames: " << numKeyFrames << std::endl;
+        std::getline(file, line);
+        Object obj;
+        // 頂点データの読み込み
+        for (int i = 0; i < numVertices; ++i) {
+            std::getline(file, line);
+            std::stringstream vertexStream(line);
+            std::string s;
+            std::vector<std::string> vertexData;
+            while (std::getline(vertexStream, s, ',')) {
+                vertexData.push_back(s);
+            }
+            Vertex vertex;
+            vertex.pos = glm::vec3(std::stof(vertexData.at(1)), std::stof(vertexData.at(2)), std::stof(vertexData.at(3)));
+            //std::cout << "Vertex: " << vertex.pos.x << ", " << vertex.pos.y << ", " << vertex.pos.z << std::endl;
+            obj.vertices.push_back(vertex);
+        }
+
+        // インデックスデータの読み込み
+        for (int i = 0; i < numIndices; ++i) {
+            std::getline(file, line);
+            std::stringstream indexStream(line);
+            uint16_t index;
+            indexStream >> token;
+            while (std::getline(indexStream, token, ',')) {
+                obj.indices.push_back(static_cast<uint16_t>(std::stoi(token)));
+            }
+            std::cout << "Index: " << obj.indices.at(i) << std::endl;
+        }
+
+        // キーフレームデータの読み込み
+        for (int i = 0; i < numKeyFrames; ++i) {
+            std::getline(file, line);
+            std::stringstream keyframeStream(line);
+            KeyFrame keyframe;
+            uint32_t frame;
+            keyframeStream >> frame >> keyframe.startData >> keyframe.endData >> keyframe.startFrame >> keyframe.endFrame >> keyframe.easingtype;
+            obj.keyframes[frame] = keyframe;
+        }
+
+        objects.push_back(obj);
+    }
+    
+
+
+    file.close();
+    return objects;
+}
 
 std::vector<Vertex> vertices = {
     Vertex{ glm::vec3(-0.5f, -0.5f, 0.0f ), glm::vec3( 0.0, 0.0, 1.0 ) },
@@ -113,7 +187,6 @@ SceeneData sceneData = {
 };
 
 int main() {
-
     auto requiredLayers = { "VK_LAYER_KHRONOS_validation" };
 
     //GLFWの初期化
@@ -235,6 +308,15 @@ int main() {
 
     //キューの取得
     vk::Queue graphicsQueue = device->getQueue(graphicsQueueFamilyIndex, 0);
+
+    //オブジェクトをCSVファイルから読み込む
+
+    std::vector<Object> objects = loadObjectsFromCSV("C:/Users/enjoy/Documents/VisualStudioCode/vulkan/sessions2024/output.csv");
+
+    // オブジェクトの確認
+    for (const auto& obj : objects) {
+        //std::cout << "Object with " << obj.vertices.size() << " vertices and " << obj.indices.size() << " indices." << std::endl;
+    }
 
     //頂点バッファの作成
     
