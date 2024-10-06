@@ -1,8 +1,15 @@
 ﻿#include <iostream>
 #include <vector>
+#include <map>
 #include <fstream>
 #include <filesystem>
 #include <cstring>
+#include <chrono>
+#include <thread>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/transform.hpp>
 #include <vulkan/vulkan.hpp>
 #include <GLFW/glfw3.h>
 
@@ -11,6 +18,8 @@
 
 const uint32_t screenWidth = 1920;
 const uint32_t screenHeight = 1080;
+
+uint32_t frameCount = 0;
 
 bool memoryChecker(vk::PhysicalDeviceMemoryProperties memProps, vk::MemoryRequirements memReq, vk::MemoryAllocateInfo& allocInfo) {
     bool suitableMemoryTypeFound = false;
@@ -42,43 +51,65 @@ bool memoryChecker(vk::PhysicalDeviceMemoryProperties memProps, vk::MemoryRequir
         return suitableMemoryTypeFound;
 }
 
-struct Vec2 {
-    float x, y;
-};
-
-struct Vec3 {
-    float x, y, z;
-};
+void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
+        glfwSetWindowShouldClose(window, GLFW_TRUE);
+    }
+}
 
 struct Vertex {
-    Vec3 pos;
-    Vec3 color;
-    Vec3 normal;
+    glm::vec3 pos;
+    glm::vec3 color;
+    glm::vec3 normal;
 };
 
 struct SceeneData {
-    Vec3 Center;
+    glm::vec3 Center;
+};
+
+
+struct Transform {
+    glm::mat4 matrix;
+
+    //コンストラクタ
+    Transform(glm::vec3 pos = glm::vec3(0,0,0), glm::vec3 rot = glm::vec3(0,0,0), glm::vec3 scale = glm::vec3(1,1,1)) {
+        glm::mat4 rotate = glm::rotate(glm::mat4(), rot.x, glm::vec3(1, 0, 0)) * glm::rotate(glm::mat4(), rot.y, glm::vec3(0, 1, 0)) * glm::rotate(glm::mat4(), rot.z, glm::vec3(0, 0, 1));
+        matrix = glm::translate(glm::mat4(), pos) * rotate * glm::scale(glm::mat4(1.0f), scale);
+    }
+};
+
+struct KeyFrame {
+    uint32_t startData;
+    uint32_t endData;
+    uint32_t startFrame;
+    uint32_t endFrame;
+    uint32_t easingtype;
 };
 
 struct Object {
     std::vector<Vertex> vertices;
     std::vector<uint16_t> indices;
-    Vec3 pos;
-    Vec3 rot;
-    Vec3 scale;
+    std::vector<Transform> modelMatrices;
+    std::map<uint32_t,KeyFrame> keyframes;
+};
+
+struct Camera {
+    std::vector<Transform> viewMatrices;
+    std::vector<Transform> projectionMatrices;
+    std::map<uint32_t,KeyFrame> keyframes;
 };
 
 std::vector<Vertex> vertices = {
-    Vertex{ Vec3{-0.5f, -0.5f, 0.0f }, Vec3{ 0.0, 0.0, 1.0 } },
-    Vertex{ Vec3{ 0.5f,  0.5f, 0.0f }, Vec3{ 0.0, 1.0, 0.0 } },
-    Vertex{ Vec3{-0.5f,  0.5f, 0.0f }, Vec3{ 1.0, 0.0, 0.0 } },
-    Vertex{ Vec3{ 0.5f, -0.5f, 0.0f }, Vec3{ 1.0, 1.0, 1.0 } },
+    Vertex{ glm::vec3(-0.5f, -0.5f, 0.0f ), glm::vec3( 0.0, 0.0, 1.0 ) },
+    Vertex{ glm::vec3( 0.5f,  0.5f, 0.0f ), glm::vec3( 0.0, 1.0, 0.0 ) },
+    Vertex{ glm::vec3(-0.5f,  0.5f, 0.0f ), glm::vec3( 1.0, 0.0, 0.0 ) },
+    Vertex{ glm::vec3( 0.5f, -0.5f, 0.0f ), glm::vec3( 1.0, 1.0, 1.0 ) },
 };
 
 std::vector<uint16_t> indices = { 0, 1, 2, 1, 0, 3 };
 
 SceeneData sceneData = {
-    Vec3{0.3f, -0.2f, 0.0f}
+    glm::vec3{0.3f, -0.2f, 0.0f}
 };
 
 int main() {
@@ -127,6 +158,8 @@ int main() {
         return -1;
     }
 
+    //キーボード入力のコールバック関数の登録
+    glfwSetKeyCallback(window, keyCallback);
 
     // コンストラクタでVulkan-Hpp(C++)形式に変換
     vk::UniqueSurfaceKHR surface{ c_surface, instance.get() };
@@ -849,8 +882,10 @@ int main() {
     imgRenderedSemaphore = device->createSemaphoreUnique(semaphoreCreateInfo);
 
     //メインループ
+    int64_t frameCount = 0;
 
     while (!glfwWindowShouldClose(window)) {
+        auto frameStartTime = std::chrono::high_resolution_clock::now();//フレームの開始時間を記録
         glfwPollEvents();
 
         //aquireNextImageの前にレンダリングが終わるまで待機
@@ -863,8 +898,6 @@ int main() {
             return -1;
         }
         uint32_t imgIndex = acquireImgResult.value;
-
-        //std::cout << "imgIndex: " << imgIndex << std::endl;
 
         cmdBufs[0]->reset();
 
@@ -936,6 +969,17 @@ int main() {
         presentInfo.pWaitSemaphores = presentWaitSemaphores;
 
         graphicsQueue.presentKHR(presentInfo);
+
+        // フレームレートを30fpsに制御
+        std::cout << "Frame: " << frameCount << std::endl;
+        frameCount++;
+        
+        double targetFrameDuration = 1000.0 / 30.0; // 30fpsのためのフレーム時間（ミリ秒）
+
+        while(std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - frameStartTime).count() < targetFrameDuration) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(0));
+        }
+        std::cout << "wateing time: " << std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - frameStartTime).count() << std::endl;
     }
 
     graphicsQueue.waitIdle();
