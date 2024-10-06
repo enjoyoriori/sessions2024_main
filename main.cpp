@@ -152,7 +152,7 @@ std::vector<Object> loadObjectsFromCSV(const std::string& filename) {
             }
             for(int j = 1;j<indexData.size();j++){
                 obj.indices.push_back(std::stoi(indexData.at(j)));
-                std::cout << "Index: " << obj.indices.at(i*3+j-1) << std::endl;
+                //std::cout << "Index: " << obj.indices.at(i*3+j-1) << std::endl;
             }
         }
 
