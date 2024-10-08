@@ -81,11 +81,8 @@ struct Transform {
 };
 
 struct KeyFrame {
-    uint32_t startData;
-    uint32_t endData;
     uint32_t startFrame;
-    uint32_t endFrame;
-    uint32_t easingtype;
+    std::string easingtype;
 };
 
 struct Object {
@@ -100,6 +97,12 @@ struct Camera {
     std::vector<glm::mat4> projectionMatrices;
     std::map<uint32_t,KeyFrame> keyframes;
 };
+
+void outputMatrix(glm::mat4 matrix) {
+    for (int i = 0; i < 4; i++) {
+        std::cout << matrix[i][0] << ", " << matrix[i][1] << ", " << matrix[i][2] << ", " << matrix[i][3] << std::endl;
+    }
+}
 
 std::vector<Object> loadObjectsFromCSV(const std::string& filename) {
     std::ifstream file(filename);
@@ -161,9 +164,29 @@ std::vector<Object> loadObjectsFromCSV(const std::string& filename) {
             std::getline(file, line);
             std::stringstream keyframeStream(line);
             KeyFrame keyframe;
-            uint32_t frame;
-            keyframeStream >> frame >> keyframe.startData >> keyframe.endData >> keyframe.startFrame >> keyframe.endFrame >> keyframe.easingtype;
-            obj.keyframes[frame] = keyframe;
+            glm::vec3 pos, rot, scale = glm::vec3(1, 1, 1);
+
+            std::getline(keyframeStream, token, ',');keyframe.startFrame = std::stoi(token);
+
+            std::getline(keyframeStream, token, ',');   pos.x = std::stof(token);
+            std::getline(keyframeStream, token, ',');   pos.y = std::stof(token);
+            std::getline(keyframeStream, token, ',');   pos.z = std::stof(token);
+
+            std::getline(keyframeStream, token, ',');   rot.x = std::stof(token);
+            std::getline(keyframeStream, token, ',');   rot.y = std::stof(token);
+            std::getline(keyframeStream, token, ',');   rot.z = std::stof(token);
+
+            std::getline(keyframeStream, token, ',');   scale.x = std::stof(token);
+            std::getline(keyframeStream, token, ',');   scale.y = std::stof(token);
+            std::getline(keyframeStream, token, ',');   scale.z = std::stof(token);
+
+            std::getline(keyframeStream, token, ',');   keyframe.easingtype = token;
+
+            obj.keyframes[keyframe.startFrame] = keyframe;
+            Transform transform(pos, rot, scale);
+            obj.modelMatrices.push_back(transform);
+            
+            //std::cout << "KeyFrame: " << keyframe.startFrame << ", " << pos.x << ", " << pos.y << ", " << pos.z << ", " << rot.x << ", " << rot.y << ", " << rot.z << ", " << scale.x << ", " << scale.y << ", " << scale.z << ", " << keyframe.easingtype << std::endl;
         }
 
         objects.push_back(obj);
@@ -212,6 +235,7 @@ int main() {
     //ウィンドウの作成
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_DECORATED, GLFW_FALSE); // 縁のないウィンドウを作成
 
     GLFWwindow* window;
     window = glfwCreateWindow(screenWidth, screenHeight, "GLFW Test Window", NULL, NULL);
@@ -316,9 +340,16 @@ int main() {
     std::vector<Object> objects = loadObjectsFromCSV("C:/Users/enjoy/Documents/VisualStudioCode/vulkan/sessions2024/output.csv");
 
     // オブジェクトの確認
+    
     for (const auto& obj : objects) {
-        //std::cout << "Object with " << obj.vertices.size() << " vertices and " << obj.indices.size() << " indices." << std::endl;
+        std::cout << "Object with " << obj.vertices.size() << " vertices and " << obj.indices.size() << " indices." << std::endl;
+        for (const auto& keyframe : obj.keyframes) {
+            std::cout << "Keyframe at frame " << keyframe.first << " with easing type " << keyframe.second.easingtype << std::endl;
+            //行列の確認
+            outputMatrix(obj.modelMatrices.at(keyframe.first).matrix);
+        }
     }
+    
 
     //頂点バッファの作成
     
