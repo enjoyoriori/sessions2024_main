@@ -69,14 +69,57 @@ struct SceeneData {
     glm::vec3 Center;
 };
 
+void outputMatrix(glm::mat4 matrix) {
+    for (int i = 0; i < 4; i++) {
+        std::cout << matrix[i][0] << ", " << matrix[i][1] << ", " << matrix[i][2] << ", " << matrix[i][3] << std::endl;
+    }
+}
+
+glm::mat4 mixMat4(const glm::mat4& mat1, const glm::mat4& mat2, float t) {
+    glm::mat4 result;
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            result[i][j] = glm::mix(mat1[i][j], mat2[i][j], t);
+        }
+    }
+    return result;
+}
+
+glm::mat4 matMixer(glm::mat4 mat1, glm::mat4 mat2, uint32_t startFrame, uint32_t endFrame, uint32_t currentFrame, std::string easingType) {
+    glm::mat4 result;
+    if (easingType == "linear") {
+        float t = (float)(currentFrame - startFrame) / (endFrame - startFrame);
+        result = mixMat4(mat1, mat2, t);
+    }
+    else if(easingType == "CONSTANT") {
+        if (currentFrame >= startFrame && currentFrame < endFrame) {
+            result = mat1;
+        }
+        else {
+            result = mat2;
+        }
+    }
+    else if(easingType == "BEZIER") {
+        float t = (float)(currentFrame - startFrame) / (endFrame - startFrame);
+        float t2 = 3 * t * t - 2 * t * t * t;
+        result = mixMat4(mat1, mat2, t2);
+    }
+    return result;
+}
 
 struct Transform {
     glm::mat4 matrix;
 
     //コンストラクタ
-    Transform(glm::vec3 pos = glm::vec3(0,0,0), glm::vec3 rot = glm::vec3(0,0,0), glm::vec3 scale = glm::vec3(1,1,1)) {
-        glm::mat4 rotate = glm::rotate(glm::mat4(), rot.x, glm::vec3(1, 0, 0)) * glm::rotate(glm::mat4(), rot.y, glm::vec3(0, 1, 0)) * glm::rotate(glm::mat4(), rot.z, glm::vec3(0, 0, 1));
-        matrix = glm::translate(glm::mat4(), pos) * rotate * glm::scale(glm::mat4(1.0f), scale);
+    Transform(glm::vec3 pos , glm::vec3 rot , glm::vec3 scale ) {
+        glm::mat4 translate = glm::translate(pos);
+        glm::mat4 rotate = glm::rotate(glm::mat4(1.0f), rot.x, glm::vec3(1, 0, 0)) * glm::rotate(glm::mat4(1.0f), rot.y, glm::vec3(0, 1, 0)) * glm::rotate(glm::mat4(1.0f), rot.z, glm::vec3(0, 0, 1));
+        glm::mat4 scaleMatrix = glm::scale(scale);
+        matrix = translate * rotate * scaleMatrix;
+        outputMatrix(translate);
+        outputMatrix(rotate);
+        outputMatrix(scaleMatrix);
+        outputMatrix(matrix);
     }
 };
 
@@ -89,20 +132,41 @@ struct Object {
     std::vector<Vertex> vertices;
     std::vector<uint16_t> indices;
     std::vector<Transform> modelMatrices;
-    std::map<uint32_t,KeyFrame> keyframes;
+    std::vector<KeyFrame> keyframes;
+    uint32_t lowerBoundFrameIndex = 0;
+
+    glm::mat4 getMatrix(uint32_t currentFrame) {
+       if(currentFrame == keyframes.at(lowerBoundFrameIndex).startFrame) {
+           return modelMatrices.at(lowerBoundFrameIndex).matrix;
+           lowerBoundFrameIndex++;
+       }
+       else{
+            return matMixer(modelMatrices.at(lowerBoundFrameIndex).matrix, modelMatrices.at(lowerBoundFrameIndex+1).matrix  //mat1, mat2
+            , keyframes.at(lowerBoundFrameIndex).startFrame, keyframes.at(lowerBoundFrameIndex+1).startFrame, currentFrame  //startFrame, endFrame, currentFrame
+            , keyframes.at(lowerBoundFrameIndex).easingtype);   //easingType
+       } 
+    } 
 };
 
 struct Camera {
     std::vector<glm::mat4> viewMatrices;
-    std::vector<glm::mat4> projectionMatrices;
-    std::map<uint32_t,KeyFrame> keyframes;
+    glm::mat4 projectionMatrices = glm::perspective(glm::radians(45.0f), (float)screenWidth / (float)screenHeight, 0.1f, 100.0f);
+    std::vector<KeyFrame> keyframes;
+    uint32_t lowerBoundFrameIndex = 0;
+
+    glm::mat4 getMatrix(uint32_t currentFrame) {
+       if(currentFrame == keyframes.at(lowerBoundFrameIndex).startFrame) {
+           return viewMatrices.at(lowerBoundFrameIndex);
+           lowerBoundFrameIndex++;
+       }
+       else{
+            return matMixer(viewMatrices.at(lowerBoundFrameIndex), viewMatrices.at(lowerBoundFrameIndex+1)  //mat1, mat2
+            , keyframes.at(lowerBoundFrameIndex).startFrame, keyframes.at(lowerBoundFrameIndex+1).startFrame, currentFrame  //startFrame, endFrame, currentFrame
+            , keyframes.at(lowerBoundFrameIndex).easingtype);   //easingType
+       } 
+    }
 };
 
-void outputMatrix(glm::mat4 matrix) {
-    for (int i = 0; i < 4; i++) {
-        std::cout << matrix[i][0] << ", " << matrix[i][1] << ", " << matrix[i][2] << ", " << matrix[i][3] << std::endl;
-    }
-}
 
 std::vector<Object> loadObjectsFromCSV(const std::string& filename) {
     std::ifstream file(filename);
@@ -182,11 +246,11 @@ std::vector<Object> loadObjectsFromCSV(const std::string& filename) {
 
             std::getline(keyframeStream, token, ',');   keyframe.easingtype = token;
 
-            obj.keyframes[keyframe.startFrame] = keyframe;
+            obj.keyframes.push_back(keyframe);
             Transform transform(pos, rot, scale);
             obj.modelMatrices.push_back(transform);
             
-            //std::cout << "KeyFrame: " << keyframe.startFrame << ", " << pos.x << ", " << pos.y << ", " << pos.z << ", " << rot.x << ", " << rot.y << ", " << rot.z << ", " << scale.x << ", " << scale.y << ", " << scale.z << ", " << keyframe.easingtype << std::endl;
+            std::cout << "KeyFrame: " << keyframe.startFrame << ", " << pos.x << ", " << pos.y << ", " << pos.z << ", " << rot.x << ", " << rot.y << ", " << rot.z << ", " << scale.x << ", " << scale.y << ", " << scale.z << ", " << keyframe.easingtype << std::endl;
         }
 
         objects.push_back(obj);
@@ -197,6 +261,45 @@ std::vector<Object> loadObjectsFromCSV(const std::string& filename) {
     file.close();
     return objects;
 }
+
+Camera loadCameraFromCSV(const std::string& filename) {//viewMatrixの読み込み
+    std::ifstream file(filename);
+    std::string line;
+    std::string token;
+    Camera camera;
+
+    while(std::getline(file, line)) {
+            std::stringstream keyframeStream(line);
+            KeyFrame keyframe;
+            glm::vec3 pos, rot, scale = glm::vec3(1, 1, 1);
+            glm::mat4 viewMatrix;
+
+            std::getline(keyframeStream, token, ',');keyframe.startFrame = std::stoi(token);
+
+            std::getline(keyframeStream, token, ',');   pos.x = std::stof(token);
+            std::getline(keyframeStream, token, ',');   pos.y = std::stof(token);
+            std::getline(keyframeStream, token, ',');   pos.z = std::stof(token);
+
+            std::getline(keyframeStream, token, ',');   rot.x = std::stof(token);
+            std::getline(keyframeStream, token, ',');   rot.y = std::stof(token);
+            std::getline(keyframeStream, token, ',');   rot.z = std::stof(token);
+
+            std::getline(keyframeStream, token, ',');   scale.x = std::stof(token);
+            std::getline(keyframeStream, token, ',');   scale.y = std::stof(token);
+            std::getline(keyframeStream, token, ',');   scale.z = std::stof(token);
+
+            std::getline(keyframeStream, token, ',');   keyframe.easingtype = token;
+
+            Transform transform = Transform(pos, rot, scale);
+            viewMatrix = glm::inverse(transform.matrix);
+
+            camera.keyframes.push_back(keyframe);
+            camera.viewMatrices.push_back(viewMatrix);
+            
+            std::cout << "KeyFrame: " << keyframe.startFrame << ", " << pos.x << ", " << pos.y << ", " << pos.z << ", " << rot.x << ", " << rot.y << ", " << rot.z << ", " << scale.x << ", " << scale.y << ", " << scale.z << ", " << keyframe.easingtype << std::endl;
+        }
+    return camera;
+};
 
 std::vector<Vertex> vertices = {
     Vertex{ glm::vec3(-0.5f, -0.5f, 0.0f ), glm::vec3( 0.0, 0.0, 1.0 ) },
@@ -339,17 +442,24 @@ int main() {
 
     std::vector<Object> objects = loadObjectsFromCSV("C:/Users/enjoy/Documents/VisualStudioCode/vulkan/sessions2024/output.csv");
 
+    Camera camera = loadCameraFromCSV("C:/Users/enjoy/Documents/VisualStudioCode/vulkan/sessions2024/camera.csv");
+
     // オブジェクトの確認
     
     for (const auto& obj : objects) {
         std::cout << "Object with " << obj.vertices.size() << " vertices and " << obj.indices.size() << " indices." << std::endl;
-        for (const auto& keyframe : obj.keyframes) {
-            std::cout << "Keyframe at frame " << keyframe.first << " with easing type " << keyframe.second.easingtype << std::endl;
-            //行列の確認
-            outputMatrix(obj.modelMatrices.at(keyframe.first).matrix);
+        for (int i = 0; i < obj.modelMatrices.size(); i++) {
+            std::cout << "Keyframe at " << obj.keyframes.at(i).startFrame << " with easing type " << obj.keyframes.at(i).easingtype << std::endl;
+            outputMatrix(obj.modelMatrices.at(i).matrix);
         }
     }
     
+    // カメラの確認
+    std::cout << camera.viewMatrices.size() << " view matrices." << std::endl;
+    for(int i = 0; i < camera.viewMatrices.size(); i++) {
+        std::cout << "Keyframe at " << camera.keyframes.at(i).startFrame << " with easing type " << camera.keyframes.at(i).easingtype << std::endl;
+        outputMatrix(camera.viewMatrices.at(i));
+    }
 
     //頂点バッファの作成
     
