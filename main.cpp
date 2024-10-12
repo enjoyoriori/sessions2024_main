@@ -63,11 +63,11 @@ struct Vertex {
     glm::vec3 pos;
     glm::vec3 color;
     glm::vec3 normal;
-    uint32_t objectIndex = 0;
+    uint32_t objectIndex;
 };
 
 struct SceeneData {
-    glm::mat4 modelMatrix;
+    //glm::mat4 modelMatrix; モデル行列は別で送る
     glm::mat4 viewMatrix;
     glm::mat4 projectionMatrix;
 };
@@ -90,7 +90,7 @@ glm::mat4 mixMat4(const glm::mat4& mat1, const glm::mat4& mat2, float t) {
 
 glm::mat4 matMixer(glm::mat4 mat1, glm::mat4 mat2, uint32_t startFrame, uint32_t endFrame, uint32_t currentFrame, std::string easingType) {
     glm::mat4 result;
-    if (easingType == "linear") {
+    if (easingType == "LINEAR") {
         float t = (float)(currentFrame - startFrame) / (endFrame - startFrame);
         result = mixMat4(mat1, mat2, t);
     }
@@ -136,17 +136,19 @@ struct Object {
     std::vector<uint16_t> indices;
     std::vector<Transform> modelMatrices;
     std::vector<KeyFrame> keyframes;
-    uint32_t lowerBoundFrameIndex = 0;
+    uint32_t upperBoundFrameIndex = 0;
 
     glm::mat4 getMatrix(uint32_t currentFrame) {
-       if(currentFrame == keyframes.at(lowerBoundFrameIndex).startFrame) {
-           return modelMatrices.at(lowerBoundFrameIndex).matrix;
-           lowerBoundFrameIndex++;
+       if(currentFrame == keyframes.at(upperBoundFrameIndex).startFrame) {
+            int i = upperBoundFrameIndex;
+            upperBoundFrameIndex++;
+            return modelMatrices.at(i).matrix;
        }
        else{
-            return matMixer(modelMatrices.at(lowerBoundFrameIndex).matrix, modelMatrices.at(lowerBoundFrameIndex+1).matrix  //mat1, mat2
-            , keyframes.at(lowerBoundFrameIndex).startFrame, keyframes.at(lowerBoundFrameIndex+1).startFrame, currentFrame  //startFrame, endFrame, currentFrame
-            , keyframes.at(lowerBoundFrameIndex).easingtype);   //easingType
+            std::cout << keyframes.at(upperBoundFrameIndex).startFrame << currentFrame << upperBoundFrameIndex << std::endl;
+            return matMixer(modelMatrices.at(upperBoundFrameIndex-1).matrix, modelMatrices.at(upperBoundFrameIndex).matrix  //mat1, mat2
+            , keyframes.at(upperBoundFrameIndex-1).startFrame, keyframes.at(upperBoundFrameIndex).startFrame, currentFrame  //startFrame, endFrame, currentFrame
+            , keyframes.at(upperBoundFrameIndex-1).easingtype);   //easingType
        } 
     } 
 };
@@ -155,19 +157,21 @@ struct Camera {
     std::vector<glm::mat4> viewMatrices;
     glm::mat4 projectionMatrices = glm::perspective(glm::radians(45.0f), (float)screenWidth / (float)screenHeight, 0.1f, 100.0f);
     std::vector<KeyFrame> keyframes;
-    uint32_t lowerBoundFrameIndex = 0;
+    uint32_t upperBoundFrameIndex = 0;
 
     glm::mat4 getMatrix(uint32_t currentFrame) {
-       if(currentFrame == keyframes.at(lowerBoundFrameIndex).startFrame) {
-           return viewMatrices.at(lowerBoundFrameIndex);
-           lowerBoundFrameIndex++;
+       if(currentFrame == keyframes.at(upperBoundFrameIndex).startFrame) {
+            int i = upperBoundFrameIndex;
+            upperBoundFrameIndex++;
+            return viewMatrices.at(i);
        }
        else{
-            return matMixer(viewMatrices.at(lowerBoundFrameIndex), viewMatrices.at(lowerBoundFrameIndex+1)  //mat1, mat2
-            , keyframes.at(lowerBoundFrameIndex).startFrame, keyframes.at(lowerBoundFrameIndex+1).startFrame, currentFrame  //startFrame, endFrame, currentFrame
-            , keyframes.at(lowerBoundFrameIndex).easingtype);   //easingType
+            std::cout << keyframes.at(upperBoundFrameIndex).startFrame << currentFrame << std::endl;
+            return matMixer(viewMatrices.at(upperBoundFrameIndex-1), viewMatrices.at(upperBoundFrameIndex) //mat1, mat2
+            , keyframes.at(upperBoundFrameIndex-1).startFrame, keyframes.at(upperBoundFrameIndex).startFrame, currentFrame  //startFrame, endFrame, currentFrame
+            , keyframes.at(upperBoundFrameIndex-1).easingtype);   //easingType
        } 
-    }
+    } 
 };
 
 
@@ -210,7 +214,7 @@ std::vector<Object> loadObjectsFromCSV(const std::string& filename) {
             vertex.pos = glm::vec3(std::stof(vertexData.at(1)), std::stof(vertexData.at(2)), std::stof(vertexData.at(3)));
             //std::cout << "Vertex: " << vertex.pos.x << ", " << vertex.pos.y << ", " << vertex.pos.z << std::endl;
             vertex.color = glm::vec3(1.0,0.0,0.0);//色の設定
-            vertex.objectIndex = j;
+            vertex.objectIndex = i;
             obj.vertices.push_back(vertex);
         }
         // インデックスデータの読み込み
@@ -681,13 +685,13 @@ int main() {
     //ユニフォームバッファの作成
 
     SceeneData sceneData = {
-        glm::mat4(1.0f),
+        //glm::mat4(1.0f),
         camera.viewMatrices.at(0),
         camera.projectionMatrices
     };
     
     vk::BufferCreateInfo uniformBufferCreateInfo;
-    uniformBufferCreateInfo.size = sizeof(sceneData);
+    uniformBufferCreateInfo.size = sizeof(sceneData) + sizeof(glm::mat4) * objects.size();
     uniformBufferCreateInfo.usage = vk::BufferUsageFlagBits::eUniformBuffer;
     uniformBufferCreateInfo.sharingMode = vk::SharingMode::eExclusive;
 
@@ -713,27 +717,34 @@ int main() {
     
     //デスクリプタセットの作成
     
-    vk::DescriptorSetLayoutBinding descSetLayoutBinding[1];
+    vk::DescriptorSetLayoutBinding descSetLayoutBinding[2];
     descSetLayoutBinding[0].binding = 0;
     descSetLayoutBinding[0].descriptorType = vk::DescriptorType::eUniformBuffer;
     descSetLayoutBinding[0].descriptorCount = 1;
     descSetLayoutBinding[0].stageFlags = vk::ShaderStageFlagBits::eVertex;
 
+    descSetLayoutBinding[1].binding = 1;
+    descSetLayoutBinding[1].descriptorType = vk::DescriptorType::eUniformBuffer;
+    descSetLayoutBinding[1].descriptorCount = 1;
+    descSetLayoutBinding[1].stageFlags = vk::ShaderStageFlagBits::eVertex;
+
     vk::DescriptorSetLayoutCreateInfo descSetLayoutCreateInfo{};
-    descSetLayoutCreateInfo.bindingCount = 1;
+    descSetLayoutCreateInfo.bindingCount = 2;
     descSetLayoutCreateInfo.pBindings = descSetLayoutBinding;
 
     vk::UniqueDescriptorSetLayout descSetLayout = device->createDescriptorSetLayoutUnique(descSetLayoutCreateInfo);
 
     //デスクリプタプールの作成
 
-    vk::DescriptorPoolSize descPoolSize[1];
+    vk::DescriptorPoolSize descPoolSize[2];
     descPoolSize[0].type = vk::DescriptorType::eUniformBuffer;
     descPoolSize[0].descriptorCount = 1;
+    descPoolSize[1].type = vk::DescriptorType::eUniformBuffer;
+    descPoolSize[1].descriptorCount = 1;
 
     vk::DescriptorPoolCreateInfo descPoolCreateInfo;
     descPoolCreateInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
-    descPoolCreateInfo.poolSizeCount = 1;
+    descPoolCreateInfo.poolSizeCount = 2;
     descPoolCreateInfo.pPoolSizes = descPoolSize;
     descPoolCreateInfo.maxSets = 1;
 
@@ -752,20 +763,32 @@ int main() {
     std::vector<vk::UniqueDescriptorSet> descSets = device->allocateDescriptorSetsUnique(descSetAllocInfo);
 
     //デスクリプタの更新
-
-    vk::WriteDescriptorSet writeDescSet;
-    writeDescSet.dstSet = descSets[0].get();
-    writeDescSet.dstBinding = 0;
-    writeDescSet.dstArrayElement = 0;
-    writeDescSet.descriptorType = vk::DescriptorType::eUniformBuffer;
-
     vk::DescriptorBufferInfo descBufInfo[1];
     descBufInfo[0].buffer = uniformBuf.get();
     descBufInfo[0].offset = 0;
     descBufInfo[0].range = sizeof(sceneData);
 
-    writeDescSet.descriptorCount = 1;
-    writeDescSet.pBufferInfo = descBufInfo;
+    vk::DescriptorBufferInfo descBufInfoDynamic[1];
+    descBufInfoDynamic[0].buffer = uniformBuf.get();
+    descBufInfoDynamic[0].offset = sizeof(SceeneData);  // モデル行列はview/projection行列の後に配置
+    descBufInfoDynamic[0].range = sizeof(glm::mat4) * objects.size();    // 各モデル行列のサイズ
+
+    vk::WriteDescriptorSet writeDescSet[2];
+    writeDescSet[0].dstSet = descSets[0].get();
+    writeDescSet[0].dstBinding = 0;
+    writeDescSet[0].dstArrayElement = 0;
+    writeDescSet[0].descriptorType = vk::DescriptorType::eUniformBuffer;
+    writeDescSet[0].descriptorCount = 1;
+    writeDescSet[0].pBufferInfo = descBufInfo;
+
+    writeDescSet[1].dstSet = descSets[0].get();
+    writeDescSet[1].dstBinding = 1;
+    writeDescSet[1].dstArrayElement = 0;
+    writeDescSet[1].descriptorType = vk::DescriptorType::eUniformBuffer;
+    writeDescSet[1].descriptorCount = 1;
+    writeDescSet[1].pBufferInfo = descBufInfoDynamic;
+
+    
 
     device->updateDescriptorSets({ writeDescSet }, {});
     
@@ -978,7 +1001,7 @@ int main() {
     viewportState.pScissors = scissors;
 
     vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
-    vertexInputInfo.vertexAttributeDescriptionCount = 3;
+    vertexInputInfo.vertexAttributeDescriptionCount = 4;
     vertexInputInfo.pVertexAttributeDescriptions = vertexInputDescription;
     vertexInputInfo.vertexBindingDescriptionCount = 1;
     vertexInputInfo.pVertexBindingDescriptions = vertexBindingDescription;
@@ -1132,7 +1155,7 @@ int main() {
     imgRenderedSemaphore = device->createSemaphoreUnique(semaphoreCreateInfo);
 
     //メインループ
-    int64_t frameCount = 0;
+    int64_t frameCount = 0;//start FrameCount
 
     while (!glfwWindowShouldClose(window)) {
         auto frameStartTime = std::chrono::high_resolution_clock::now();//フレームの開始時間を記録
@@ -1143,9 +1166,24 @@ int main() {
         device->resetFences({ imgRenderedFence.get() });
 
         //ユニフォームバッファの更新
-        sceneData.modelMatrix = glm::rotate(glm::mat4(1.0f), glm::radians(0.1f * frameCount), glm::vec3(0.0f, 1.0f, 0.0f));
+        //sceneData.modelMatrix = glm::rotate(glm::mat4(1.0f), glm::radians(0.1f * frameCount), glm::vec3(0.0f, 1.0f, 0.0f));
+
         sceneData.viewMatrix = camera.getMatrix(frameCount);
-        std::memcpy(pUniformBufMem, &sceneData, uniformBufMemReq.size);
+        
+        std::memcpy(pUniformBufMem, &sceneData, sizeof(sceneData));
+      
+        //モデル行列の更新
+        
+        std::vector<glm::mat4> modelMatrices(objects.size());
+        for(int i = 0; i < objects.size(); i++) {
+            modelMatrices.at(i) = objects.at(i).getMatrix(frameCount);
+            std::cout << "modelMatrices.at(" << i << "): "<< std::endl;
+
+        }
+
+        
+
+        std::memcpy(static_cast<char*>(pUniformBufMem) + sizeof(SceeneData), modelMatrices.data(), sizeof(glm::mat4) * objects.size());
 
         vk::MappedMemoryRange uniformBufMemoryRange;
         uniformBufMemoryRange.memory = uniformBufMemory.get();
@@ -1190,7 +1228,7 @@ int main() {
         cmdBufs[0]->bindVertexBuffers(0, { vertBuf.get() }, { 0 });
         cmdBufs[0]->bindIndexBuffer(indexBuf.get(), 0, vk::IndexType::eUint16);
         cmdBufs[0]->bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout.get(), 0, { descSets[0].get() }, {});   //デスクリプタセットのバインド
-
+        
         cmdBufs[0]->drawIndexed(indexCount, 1, 0, 0, 0);
 
         cmdBufs[0]->endRenderPass();

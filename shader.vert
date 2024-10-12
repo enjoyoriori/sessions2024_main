@@ -1,6 +1,5 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
-#extension GL_EXT_debug_printf : enable
 
 /*layout(set = 0, binding = 0) uniform SceneData {
     vec3 center;
@@ -8,30 +7,28 @@
 */
 
 layout(set = 0, binding = 0) uniform MVPData {
-    mat4 model;
+    //mat4 model;
     mat4 view;
     mat4 projection;
 } MVPMatrices;
 
-
+layout(set = 0, binding = 1) uniform OBJData{
+    mat4 model[2];
+} objData;
 
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inColor;
 layout(location = 2) in vec3 inNormal;
-layout(location = 3) in vec2 inObjectID;
+layout(location = 3) in uint inObjectID;
 
 layout(location = 0) out vec3 fragmentColor;
 
-
-
-
-
 void main() {
-    mat4 worldView = MVPMatrices.view * MVPMatrices.model;
+    mat4 worldView = MVPMatrices.view * objData.model[inObjectID];
     gl_Position = MVPMatrices.projection * worldView * vec4(inPos, 1.0);    
 
-    debugPrintfEXT("inPos: %f %f %f\n", inPos.x, inPos.y, inPos.z);
+    //debugPrintfEXT("inPos: %f %f %f\n", inPos.x, inPos.y, inPos.z);
 
     //gl_Position = vec4(inPos, 1.0);
-    fragmentColor = (inColor);
+    fragmentColor = (inColor) * inObjectID + vec3(0.349, 0.0, 1.0) * (1 - inObjectID);
 }
