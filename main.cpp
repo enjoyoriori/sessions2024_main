@@ -635,8 +635,17 @@ int main() {
 
         std::vector<uint16_t> allIndices;
 
+        uint32_t vertexOffset = 0;
+
         for (const auto& object : objects) {
-            allIndices.insert(allIndices.end(), object.indices.begin(), object.indices.end());
+            
+            // インデックスデータを追加
+            for (const auto& index : object.indices) {
+                allIndices.push_back(index + vertexOffset);
+            }
+
+            // オフセットを更新
+            vertexOffset += static_cast<uint32_t>(object.vertices.size());
         }
 
         std::memcpy(pStagingBufMem, allIndices.data(), stagingBufMemReq.size);
@@ -1157,7 +1166,7 @@ int main() {
     //メインループ
     int64_t frameCount = 0;//start FrameCount
 
-    while (!glfwWindowShouldClose(window)) {
+    while (!glfwWindowShouldClose(window) && frameCount < 50) {
         auto frameStartTime = std::chrono::high_resolution_clock::now();//フレームの開始時間を記録
         glfwPollEvents();
 

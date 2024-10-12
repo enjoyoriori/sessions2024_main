@@ -13,7 +13,7 @@ layout(set = 0, binding = 0) uniform MVPData {
 } MVPMatrices;
 
 layout(set = 0, binding = 1) uniform OBJData{
-    mat4 model[2];
+    mat4 model[3];
 } objData;
 
 layout(location = 0) in vec3 inPos;
