@@ -79,13 +79,25 @@ void outputMatrix(glm::mat4 matrix) {
 }
 
 glm::mat4 mixMat4(const glm::mat4& mat1, const glm::mat4& mat2, float t) {
-    glm::mat4 result;
-    for (int i = 0; i < 4; ++i) {
-        for (int j = 0; j < 4; ++j) {
-            result[i][j] = glm::mix(mat1[i][j], mat2[i][j], t);
-        }
-    }
-    return result;
+    // 位置の抽出
+    glm::vec3 pos1 = glm::vec3(mat1[3]);
+    glm::vec3 pos2 = glm::vec3(mat2[3]);
+    glm::vec3 newPos = glm::mix(pos1, pos2, t);
+
+    // 回転の抽出と補完
+    glm::quat rot1 = glm::quat_cast(mat1);
+    glm::quat rot2 = glm::quat_cast(mat2);
+    glm::quat newRot = glm::slerp(rot1, rot2, t);
+
+    // スケーリングの抽出
+    glm::vec3 scale1 = glm::vec3(glm::length(mat1[0]), glm::length(mat1[1]), glm::length(mat1[2]));
+    glm::vec3 scale2 = glm::vec3(glm::length(mat2[0]), glm::length(mat2[1]), glm::length(mat2[2]));
+    glm::vec3 newScale = glm::mix(scale1, scale2, t);
+
+    // 新しい行列の構成
+    glm::mat4 newMatrix = glm::translate(newPos) * glm::mat4_cast(newRot) * glm::scale(newScale);
+    outputMatrix(glm::scale(newScale));
+    return newMatrix;
 }
 
 glm::mat4 matMixer(glm::mat4 mat1, glm::mat4 mat2, uint32_t startFrame, uint32_t endFrame, uint32_t currentFrame, std::string easingType) {
@@ -116,8 +128,14 @@ struct Transform {
     //コンストラクタ
     Transform(glm::vec3 pos , glm::vec3 rot , glm::vec3 scale ) {
         glm::mat4 translate = glm::translate(pos);
-        glm::mat4 rotate = glm::rotate(glm::mat4(1.0f), rot.x, glm::vec3(1, 0, 0)) * glm::rotate(glm::mat4(1.0f), rot.y, glm::vec3(0, 1, 0)) * glm::rotate(glm::mat4(1.0f), rot.z, glm::vec3(0, 0, 1));
+
+        glm::mat4 rotateX = glm::rotate(glm::mat4(1.0f), rot.x, glm::vec3(1, 0, 0));
+        glm::mat4 rotateY = glm::rotate(glm::mat4(1.0f), rot.y, glm::vec3(0, 1, 0));
+        glm::mat4 rotateZ = glm::rotate(glm::mat4(1.0f), rot.z, glm::vec3(0, 0, 1));
+        glm::mat4 rotate = rotateX * rotateY * rotateZ; // ZYXの順で回転を適用
+
         glm::mat4 scaleMatrix = glm::scale(scale);
+        
         matrix = translate * rotate * scaleMatrix;
         outputMatrix(translate);
         outputMatrix(rotate);
@@ -155,7 +173,8 @@ struct Object {
 
 struct Camera {
     std::vector<glm::mat4> viewMatrices;
-    glm::mat4 projectionMatrices = glm::perspective(glm::radians(45.0f), (float)screenWidth / (float)screenHeight, 0.1f, 100.0f);
+    glm::mat4 projectionMatrices = glm::perspective(glm::radians(39.6f), (float)screenWidth / (float)screenHeight, 0.1f, 100.0f);
+
     std::vector<KeyFrame> keyframes;
     uint32_t upperBoundFrameIndex = 0;
 
@@ -280,32 +299,31 @@ Camera loadCameraFromCSV(const std::string& filename) {//viewMatrixの読み込�
     while(std::getline(file, line)) {
             std::stringstream keyframeStream(line);
             KeyFrame keyframe;
-            glm::vec3 pos, rot, scale = glm::vec3(1, 1, 1);
+            glm::vec3 eye, center, up = glm::vec3(1, 1, 1);
             glm::mat4 viewMatrix;
 
             std::getline(keyframeStream, token, ',');keyframe.startFrame = std::stoi(token);
 
-            std::getline(keyframeStream, token, ',');   pos.x = std::stof(token);
-            std::getline(keyframeStream, token, ',');   pos.y = std::stof(token);
-            std::getline(keyframeStream, token, ',');   pos.z = std::stof(token);
+            std::getline(keyframeStream, token, ',');   eye.x = std::stof(token);
+            std::getline(keyframeStream, token, ',');   eye.y = std::stof(token);
+            std::getline(keyframeStream, token, ',');   eye.z = std::stof(token);
 
-            std::getline(keyframeStream, token, ',');   rot.x = std::stof(token);
-            std::getline(keyframeStream, token, ',');   rot.y = std::stof(token);
-            std::getline(keyframeStream, token, ',');   rot.z = std::stof(token);
+            std::getline(keyframeStream, token, ',');   center.x = std::stof(token);
+            std::getline(keyframeStream, token, ',');   center.y = std::stof(token);
+            std::getline(keyframeStream, token, ',');   center.z = std::stof(token);
 
-            std::getline(keyframeStream, token, ',');   scale.x = std::stof(token);
-            std::getline(keyframeStream, token, ',');   scale.y = std::stof(token);
-            std::getline(keyframeStream, token, ',');   scale.z = std::stof(token);
+            std::getline(keyframeStream, token, ',');   up.x = std::stof(token);
+            std::getline(keyframeStream, token, ',');   up.y = std::stof(token);
+            std::getline(keyframeStream, token, ',');   up.z = std::stof(token);
 
             std::getline(keyframeStream, token, ',');   keyframe.easingtype = token;
 
-            Transform transform = Transform(pos, rot, scale);
-            viewMatrix = glm::inverse(transform.matrix);
+            viewMatrix = glm::lookAt(eye, center, up);
 
             camera.keyframes.push_back(keyframe);
             camera.viewMatrices.push_back(viewMatrix);
             
-            std::cout << "KeyFrame: " << keyframe.startFrame << ", " << pos.x << ", " << pos.y << ", " << pos.z << ", " << rot.x << ", " << rot.y << ", " << rot.z << ", " << scale.x << ", " << scale.y << ", " << scale.z << ", " << keyframe.easingtype << std::endl;
+            std::cout << "KeyFrame: " << keyframe.startFrame << ", " << eye.x << ", " << eye.y << ", " << eye.z << ", " << center.x << ", " << center.y << ", " << center.z << ", " << up.x << ", " << up.y << ", " << up.z << ", " << keyframe.easingtype << std::endl;
         }
     return camera;
 };
@@ -638,7 +656,7 @@ int main() {
         uint32_t vertexOffset = 0;
 
         for (const auto& object : objects) {
-            
+
             // インデックスデータを追加
             for (const auto& index : object.indices) {
                 allIndices.push_back(index + vertexOffset);
@@ -1178,6 +1196,8 @@ int main() {
         //sceneData.modelMatrix = glm::rotate(glm::mat4(1.0f), glm::radians(0.1f * frameCount), glm::vec3(0.0f, 1.0f, 0.0f));
 
         sceneData.viewMatrix = camera.getMatrix(frameCount);
+        sceneData.projectionMatrix = camera.projectionMatrices;
+        sceneData.projectionMatrix[1][1] *= -1; // Y軸反転
         
         std::memcpy(pUniformBufMem, &sceneData, sizeof(sceneData));
       

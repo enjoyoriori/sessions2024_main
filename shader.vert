@@ -25,7 +25,7 @@ layout(location = 0) out vec3 fragmentColor;
 
 void main() {
     mat4 worldView = MVPMatrices.view * objData.model[inObjectID];
-    gl_Position = MVPMatrices.projection * worldView * vec4(inPos, 1.0);    
+    gl_Position = MVPMatrices.projection * MVPMatrices.view * objData.model[inObjectID] * vec4(inPos, 1.0);    
 
     //debugPrintfEXT("inPos: %f %f %f\n", inPos.x, inPos.y, inPos.z);
 
