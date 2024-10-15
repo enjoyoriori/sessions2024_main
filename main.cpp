@@ -95,7 +95,7 @@ glm::mat4 mixMat4(const glm::mat4& mat1, const glm::mat4& mat2, float t) {
     glm::vec3 newScale = glm::mix(scale1, scale2, t);
 
     // 新しい行列の構成
-    glm::mat4 newMatrix = glm::translate(newPos) * glm::mat4_cast(newRot) * glm::scale(newScale);
+    glm::mat4 newMatrix = glm::translate(glm::mat4(1.0f),newPos) * glm::mat4_cast(newRot) * glm::scale(glm::mat4(1.0f),newScale);
     outputMatrix(glm::scale(newScale));
     return newMatrix;
 }
@@ -186,9 +186,9 @@ struct Camera {
        }
        else{
             std::cout << keyframes.at(upperBoundFrameIndex).startFrame << currentFrame << std::endl;
-            return matMixer(viewMatrices.at(upperBoundFrameIndex-1), viewMatrices.at(upperBoundFrameIndex) //mat1, mat2
+            return glm::inverse(matMixer(glm::inverse(viewMatrices.at(upperBoundFrameIndex-1)), glm::inverse(viewMatrices.at(upperBoundFrameIndex)) //mat1, mat2
             , keyframes.at(upperBoundFrameIndex-1).startFrame, keyframes.at(upperBoundFrameIndex).startFrame, currentFrame  //startFrame, endFrame, currentFrame
-            , keyframes.at(upperBoundFrameIndex-1).easingtype);   //easingType
+            , keyframes.at(upperBoundFrameIndex-1).easingtype));   //easingType
        } 
     } 
 };
