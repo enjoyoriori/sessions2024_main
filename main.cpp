@@ -12,11 +12,12 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/transform.hpp>
-#include <glm/gtx/matrix_interpolation.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/log_base.hpp>
 #include <vulkan/vulkan.hpp>
 #include <GLFW/glfw3.h>
+#define MINIAUDIO_IMPLEMENTATION
+#include <miniaudio.h>
 
 // cmake .. -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg/scripts/buildsystems/vcpkg.cmake
 // cmake --build .
@@ -373,6 +374,12 @@ int main() {
     //GLFWの初期化
     if (!glfwInit())
         return -1;
+
+    //エンジンの初期化
+    ma_engine engine;
+    if (ma_engine_init(NULL, &engine) != MA_SUCCESS) {
+        return -1;
+    }
 
     //インスタンスの作成
 
@@ -1202,6 +1209,9 @@ int main() {
     vk::UniqueSemaphore swapchainImgSemaphore, imgRenderedSemaphore;
     swapchainImgSemaphore = device->createSemaphoreUnique(semaphoreCreateInfo);
     imgRenderedSemaphore = device->createSemaphoreUnique(semaphoreCreateInfo);
+
+    //サウンドファイルの再生
+    ma_engine_play_sound(&engine, "sound.mp3", NULL);
 
     //メインループ
     int64_t frameCount = 0;//start FrameCount
