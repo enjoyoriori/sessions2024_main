@@ -12,6 +12,9 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/transform.hpp>
+#include <glm/gtx/matrix_interpolation.hpp>
+#include <glm/gtx/matrix_decompose.hpp>
+#include <glm/gtx/log_base.hpp>
 #include <vulkan/vulkan.hpp>
 #include <GLFW/glfw3.h>
 
@@ -79,25 +82,44 @@ void outputMatrix(glm::mat4 matrix) {
 }
 
 glm::mat4 mixMat4(const glm::mat4& mat1, const glm::mat4& mat2, float t) {
-    // 位置の抽出
-    glm::vec3 pos1 = glm::vec3(mat1[3]);
-    glm::vec3 pos2 = glm::vec3(mat2[3]);
-    glm::vec3 newPos = glm::mix(pos1, pos2, t);
+    // 1. 行列からスケール、回転、位置を抽出する
+    glm::vec3 scale1, scale2;
+    glm::quat rotation1, rotation2;
+    glm::vec3 translation1, translation2;
+    glm::vec3 skew;
+    glm::vec4 perspective;
 
-    // 回転の抽出と補完
-    glm::quat rot1 = glm::quat_cast(mat1);
-    glm::quat rot2 = glm::quat_cast(mat2);
-    glm::quat newRot = glm::slerp(rot1, rot2, t);
+    // mat1から成分を抽出
+    glm::decompose(mat1, scale1, rotation1, translation1, skew, perspective);
 
-    // スケーリングの抽出
-    glm::vec3 scale1 = glm::vec3(glm::length(mat1[0]), glm::length(mat1[1]), glm::length(mat1[2]));
-    glm::vec3 scale2 = glm::vec3(glm::length(mat2[0]), glm::length(mat2[1]), glm::length(mat2[2]));
-    glm::vec3 newScale = glm::mix(scale1, scale2, t);
+    // mat2から成分を抽出
+    glm::decompose(mat2, scale2, rotation2, translation2, skew, perspective);
 
-    // 新しい行列の構成
-    glm::mat4 newMatrix = glm::translate(glm::mat4(1.0f),newPos) * glm::mat4_cast(newRot) * glm::scale(glm::mat4(1.0f),newScale);
-    outputMatrix(glm::scale(newScale));
-    return newMatrix;
+    // 2. スケールの対数補間
+    glm::vec3 safeScale1 = glm::max(scale1, glm::vec3(0.0001f));
+    glm::vec3 safeScale2 = glm::max(scale2, glm::vec3(0.0001f));
+
+    glm::vec3 logScale1 = glm::log(safeScale1);
+    glm::vec3 logScale2 = glm::log(safeScale2);
+
+    glm::vec3 interpolatedLogScale = glm::mix(logScale1, logScale2, t);
+    glm::vec3 interpolatedScale = glm::exp(interpolatedLogScale);
+
+    // 3. 回転の球面線形補間 (Slerp)
+    glm::quat interpolatedRotation = glm::slerp(rotation1, rotation2, t);
+
+    // 4. 位置の線形補間
+    glm::vec3 interpolatedTranslation = glm::mix(translation1, translation2, t);
+
+    // 5. 補間したスケール、回転、位置を使って新しい変換行列を生成
+    glm::mat4 scaleMatrix = glm::scale(interpolatedScale);
+    glm::mat4 rotationMatrix = glm::mat4_cast(interpolatedRotation);  // クォータニオンから行列に変換
+    glm::mat4 translationMatrix = glm::translate(interpolatedTranslation);
+
+    // 6. 新しい行列を組み立てる
+    glm::mat4 resultMatrix = translationMatrix * rotationMatrix * scaleMatrix;
+
+    return resultMatrix;
 }
 
 glm::mat4 matMixer(glm::mat4 mat1, glm::mat4 mat2, uint32_t startFrame, uint32_t endFrame, uint32_t currentFrame, std::string easingType) {
