@@ -16,8 +16,8 @@
 #include <glm/gtx/log_base.hpp>
 #include <vulkan/vulkan.hpp>
 #include <GLFW/glfw3.h>
-#define MINIAUDIO_IMPLEMENTATION
-#include <miniaudio.h>
+//#define MINIAUDIO_IMPLEMENTATION
+//#include <miniaudio.h>
 
 // cmake .. -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg/scripts/buildsystems/vcpkg.cmake
 // cmake --build .
@@ -376,10 +376,11 @@ int main() {
         return -1;
 
     //エンジンの初期化
-    ma_engine engine;
+    /*ma_engine engine;
     if (ma_engine_init(NULL, &engine) != MA_SUCCESS) {
         return -1;
     }
+    */
 
     //インスタンスの作成
 
@@ -499,7 +500,7 @@ int main() {
     vk::Queue graphicsQueue = device->getQueue(graphicsQueueFamilyIndex, 0);
 
     //オブジェクトをCSVファイルから読み込む
-    std::vector<Object> objects = loadObjectsFromCSV("C:/Users/enjoy/Documents/VisualStudioCode/vulkan/sessions2024/output.csv");
+    std::vector<Object> objects = loadObjectsFromCSV("../../output.csv");
 
     uint32_t vertexCount = 0,indexCount = 0;;
 
@@ -509,7 +510,7 @@ int main() {
     }
 
     //カメラをCSVファイルから読み込む
-    Camera camera = loadCameraFromCSV("C:/Users/enjoy/Documents/VisualStudioCode/vulkan/sessions2024/camera.csv");
+    Camera camera = loadCameraFromCSV("../../camera.csv");
 
     // オブジェクトの確認
     for (const auto& obj : objects) {
@@ -745,9 +746,28 @@ int main() {
         camera.viewMatrices.at(0),
         camera.projectionMatrices
     };
-    
+
+    // デバイスのプロパティを取得
+    VkPhysicalDeviceProperties deviceProperties;
+    vkGetPhysicalDeviceProperties(physicalDevice, &deviceProperties);
+    VkDeviceSize minUniformBufferOffsetAlignment = deviceProperties.limits.minUniformBufferOffsetAlignment;
+        
+    // シーンデータのサイズ
+    VkDeviceSize sceneDataSize = sizeof(SceeneData);
+
+    // モデル行列のサイズ
+    VkDeviceSize modelMatricesSize = sizeof(glm::mat4) * objects.size();
+
+    //オフセットの調整
+
+    VkDeviceSize alignedOffset = ((sceneDataSize + minUniformBufferOffsetAlignment -1) / minUniformBufferOffsetAlignment) * minUniformBufferOffsetAlignment;
+
+    // 必要なメモリサイズを計算し、minUniformBufferOffsetAlignmentの倍数に調整
+    VkDeviceSize totalSize = sceneDataSize + modelMatricesSize;
+    VkDeviceSize alignedTotalSize = ((alignedOffset + modelMatricesSize + minUniformBufferOffsetAlignment - 1) / minUniformBufferOffsetAlignment) * minUniformBufferOffsetAlignment;
+
     vk::BufferCreateInfo uniformBufferCreateInfo;
-    uniformBufferCreateInfo.size = sizeof(sceneData) + sizeof(glm::mat4) * objects.size();
+    uniformBufferCreateInfo.size = alignedTotalSize;
     uniformBufferCreateInfo.usage = vk::BufferUsageFlagBits::eUniformBuffer;
     uniformBufferCreateInfo.sharingMode = vk::SharingMode::eExclusive;
 
@@ -822,12 +842,12 @@ int main() {
     vk::DescriptorBufferInfo descBufInfo[1];
     descBufInfo[0].buffer = uniformBuf.get();
     descBufInfo[0].offset = 0;
-    descBufInfo[0].range = sizeof(sceneData);
+    descBufInfo[0].range = sceneDataSize;
 
     vk::DescriptorBufferInfo descBufInfoDynamic[1];
     descBufInfoDynamic[0].buffer = uniformBuf.get();
-    descBufInfoDynamic[0].offset = sizeof(SceeneData);  // モデル行列はview/projection行列の後に配置
-    descBufInfoDynamic[0].range = sizeof(glm::mat4) * objects.size();    // 各モデル行列のサイズ
+    descBufInfoDynamic[0].offset = alignedOffset;  // モデル行列はview/projection行列の後に配置
+    descBufInfoDynamic[0].range = modelMatricesSize;    // 各モデル行列のサイズ
 
     vk::WriteDescriptorSet writeDescSet[2];
     writeDescSet[0].dstSet = descSets[0].get();
@@ -843,8 +863,6 @@ int main() {
     writeDescSet[1].descriptorType = vk::DescriptorType::eUniformBuffer;
     writeDescSet[1].descriptorCount = 1;
     writeDescSet[1].pBufferInfo = descBufInfoDynamic;
-
-    
 
     device->updateDescriptorSets({ writeDescSet }, {});
     
@@ -905,7 +923,6 @@ int main() {
     //スワップチェインのイメージの取得
     std::vector<vk::Image> swapchainImages = device->getSwapchainImagesKHR(swapchain.get());
 
-    
     // イメージの作成
 /*
     vk::ImageCreateInfo imgCreateInfo;
@@ -1211,7 +1228,7 @@ int main() {
     imgRenderedSemaphore = device->createSemaphoreUnique(semaphoreCreateInfo);
 
     //サウンドファイルの再生
-    ma_engine_play_sound(&engine, "sound.mp3", NULL);
+    //ma_engine_play_sound(&engine, "sound.mp3", NULL);
 
     //メインループ
     int64_t frameCount = 0;//start FrameCount
@@ -1230,22 +1247,21 @@ int main() {
         sceneData.viewMatrix = camera.getMatrix(frameCount);
         sceneData.projectionMatrix = camera.projectionMatrices;
         sceneData.projectionMatrix[1][1] *= -1; // Y軸反転
-        
-        std::memcpy(pUniformBufMem, &sceneData, sizeof(sceneData));
-      
-        //モデル行列の更新
-        
-        std::vector<glm::mat4> modelMatrices(objects.size());
-        for(int i = 0; i < objects.size(); i++) {
-            modelMatrices.at(i) = objects.at(i).getMatrix(frameCount);
-            std::cout << "modelMatrices.at(" << i << "): "<< std::endl;
 
+        // シーンデータのコピー
+        std::memcpy(pUniformBufMem, &sceneData, sceneDataSize);
+
+        // モデル行列の更新
+        std::vector<glm::mat4> modelMatrices(objects.size());
+        for (int i = 0; i < objects.size(); i++) {
+            modelMatrices.at(i) = objects.at(i).getMatrix(frameCount);
+            std::cout << "modelMatrices.at(" << i << "): " << std::endl;
         }
 
-        
+        // モデル行列を調整したオフセットにコピー
+        std::memcpy(static_cast<char*>(pUniformBufMem) + alignedOffset, modelMatrices.data(), modelMatricesSize);
 
-        std::memcpy(static_cast<char*>(pUniformBufMem) + sizeof(SceeneData), modelMatrices.data(), sizeof(glm::mat4) * objects.size());
-
+        // メモリ範囲のフラッシュ
         vk::MappedMemoryRange uniformBufMemoryRange;
         uniformBufMemoryRange.memory = uniformBufMemory.get();
         uniformBufMemoryRange.offset = 0;
