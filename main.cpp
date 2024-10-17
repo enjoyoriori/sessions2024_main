@@ -1,4 +1,5 @@
-﻿#include <iostream>
+﻿#define MINIAUDIO_IMPLEMENTATION
+#include <iostream>
 #include <vector>
 #include <map>
 #include <fstream>
@@ -16,8 +17,8 @@
 #include <glm/gtx/log_base.hpp>
 #include <vulkan/vulkan.hpp>
 #include <GLFW/glfw3.h>
-//#define MINIAUDIO_IMPLEMENTATION
-//#include <miniaudio.h>
+
+#include <miniaudio.h>
 
 // cmake .. -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg/scripts/buildsystems/vcpkg.cmake
 // cmake --build .
@@ -376,11 +377,11 @@ int main() {
         return -1;
 
     //エンジンの初期化
-    /*ma_engine engine;
+    ma_engine engine;
     if (ma_engine_init(NULL, &engine) != MA_SUCCESS) {
         return -1;
     }
-    */
+    
 
     //インスタンスの作成
 
