@@ -17,5 +17,4 @@ target_link_libraries(app PRIVATE glfw) # 追加
 find_package(glm CONFIG REQUIRED)
 target_link_libraries(app PRIVATE glm::glm)
 
-set(MINIAUDIO_INCLUDE_DIR "C:/vcpkg/installed/x64-windows/include")
-target_include_directories(app PRIVATE ${MINIAUDIO_INCLUDE_DIR})
+target_include_directories(app PRIVATE ./third_party)

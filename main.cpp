@@ -1,5 +1,4 @@
-﻿#define MINIAUDIO_IMPLEMENTATION
-#include <iostream>
+﻿#include <iostream>
 #include <vector>
 #include <map>
 #include <fstream>
@@ -17,8 +16,10 @@
 #include <glm/gtx/log_base.hpp>
 #include <vulkan/vulkan.hpp>
 #include <GLFW/glfw3.h>
-
-#include <miniaudio.h>
+extern "C" {
+    #define MINIAUDIO_IMPLEMENTATION
+    #include "miniaudio.h"
+}
 
 // cmake .. -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg/scripts/buildsystems/vcpkg.cmake
 // cmake --build .
@@ -98,8 +99,8 @@ glm::mat4 mixMat4(const glm::mat4& mat1, const glm::mat4& mat2, float t) {
     glm::decompose(mat2, scale2, rotation2, translation2, skew, perspective);
 
     // 2. スケールの対数補間
-    glm::vec3 safeScale1 = glm::max(scale1, glm::vec3(0.0001f));
-    glm::vec3 safeScale2 = glm::max(scale2, glm::vec3(0.0001f));
+    glm::vec3 safeScale1 = scale1;
+    glm::vec3 safeScale2 = scale2;
 
     glm::vec3 logScale1 = glm::log(safeScale1);
     glm::vec3 logScale2 = glm::log(safeScale2);
@@ -144,6 +145,36 @@ glm::mat4 matMixer(glm::mat4 mat1, glm::mat4 mat2, uint32_t startFrame, uint32_t
         result = mixMat4(mat1, mat2, t2);
     }
     return result;
+}
+
+void playSoundInThread(ma_engine* pEngine, const char* filePath) {
+    ma_result result;
+    ma_sound sound;
+
+    // 音声オブジェクトの初期化
+    result = ma_sound_init_from_file(pEngine, filePath, 0, NULL, NULL, &sound);
+    if (result != MA_SUCCESS) {
+        std::cerr << "Failed to initialize sound." << std::endl;
+        return;
+    }
+
+    // 音声ファイルを再生
+    result = ma_sound_start(&sound);
+    if (result != MA_SUCCESS) {
+        std::cerr << "Failed to play sound." << std::endl;
+        ma_sound_uninit(&sound);
+        return;
+    } else {
+        std::cout << "Playing sound: " << filePath << std::endl;
+    }
+
+    // 再生が終了するまで待機
+    while (ma_sound_is_playing(&sound)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    // 音声オブジェクトの終了
+    ma_sound_uninit(&sound);
 }
 
 struct Transform {
@@ -1229,7 +1260,9 @@ int main() {
     imgRenderedSemaphore = device->createSemaphoreUnique(semaphoreCreateInfo);
 
     //サウンドファイルの再生
-    //ma_engine_play_sound(&engine, "sound.mp3", NULL);
+    ma_engine_set_volume(&engine, 1.0f);
+
+    std::thread soundThread(playSoundInThread, &engine, "../../sound.mp3");
 
     //メインループ
     int64_t frameCount = 0;//start FrameCount
@@ -1364,7 +1397,10 @@ int main() {
     graphicsQueue.waitIdle();
 
     device->unmapMemory(uniformBufMemory.get());//メモリのアンマップ
-
     glfwTerminate();
+
+    // サウンドスレッドの終了
+    soundThread.join();
+    ma_engine_uninit(&engine);
     return 0;
 }
