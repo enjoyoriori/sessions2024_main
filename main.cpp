@@ -169,10 +169,11 @@ void playSoundInThread(ma_engine* pEngine, const char* filePath) {
     }
 
     // 再生が終了するまで待機
+    /*
     while (ma_sound_is_playing(&sound)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-
+    */
     // 音声オブジェクトの終了
     ma_sound_uninit(&sound);
 }
@@ -247,7 +248,6 @@ struct Camera {
        } 
     } 
 };
-
 
 std::vector<Object> loadObjectsFromCSV(const std::string& filename) {
     std::ifstream file(filename);
@@ -507,14 +507,54 @@ int main() {
 
     //論理デバイスの作成
 
+    // 機能の有効化
+    vk::PhysicalDeviceBufferDeviceAddressFeaturesKHR bufferDeviceAddrFeatures;
+    bufferDeviceAddrFeatures.bufferDeviceAddress = VK_TRUE;
+
+    vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipelineFeatures;
+    rayTracingPipelineFeatures.rayTracingPipeline = VK_TRUE;
+    rayTracingPipelineFeatures.pNext = &bufferDeviceAddrFeatures;
+
+    vk::PhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures;
+    accelerationStructureFeatures.accelerationStructure = VK_TRUE;
+    accelerationStructureFeatures.pNext = &rayTracingPipelineFeatures;
+
+    vk::PhysicalDeviceDescriptorIndexingFeatures descriptorIndexingFeatures;
+    descriptorIndexingFeatures.shaderUniformBufferArrayNonUniformIndexing = VK_TRUE;
+    descriptorIndexingFeatures.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    descriptorIndexingFeatures.runtimeDescriptorArray = VK_TRUE;
+    descriptorIndexingFeatures.pNext = &accelerationStructureFeatures;
+
+    // VkPhysicalDeviceFeatures2の設定
+    vk::PhysicalDeviceFeatures features = physicalDevice.getFeatures();
+
+    vk::PhysicalDeviceFeatures2 physicalDeviceFeatures2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, nullptr,};
+    physicalDeviceFeatures2.features = features;
+    physicalDeviceFeatures2.pNext = &descriptorIndexingFeatures;
+
     vk::DeviceCreateInfo devCreateInfo;
 
-    auto devRequiredExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    auto devRequiredExtensions = {
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME, 
+
+        // Vulkan Raytracing API で必要.
+        VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+        VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+        VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+
+        VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
+        VK_KHR_SPIRV_1_4_EXTENSION_NAME,
+        VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME,
+
+        // descriptor indexing に必要.
+        VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
+        };
     
     devCreateInfo.enabledExtensionCount = devRequiredExtensions.size();
     devCreateInfo.ppEnabledExtensionNames = devRequiredExtensions.begin();
     devCreateInfo.enabledLayerCount = requiredLayers.size();
     devCreateInfo.ppEnabledLayerNames = requiredLayers.begin();
+    devCreateInfo.pNext = &physicalDeviceFeatures2;
     
     //キュー情報の作成
     vk::DeviceQueueCreateInfo queueCreateInfo[1];
