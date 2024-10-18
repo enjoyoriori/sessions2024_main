@@ -13,7 +13,6 @@ target_link_libraries(app PRIVATE ${Vulkan_LIBRARIES})
 find_package(glfw3 CONFIG REQUIRED) # 追加
 target_link_libraries(app PRIVATE glfw) # 追加
 
-
 find_package(glm CONFIG REQUIRED)
 target_link_libraries(app PRIVATE glm::glm)
 
