@@ -215,7 +215,7 @@ struct KeyFrame {
 
 struct Object {
     std::vector<Vertex> vertices;
-    std::vector<uint16_t> indices;
+    std::vector<uint32_t> indices;
     std::vector<Transform> modelMatrices;
     std::vector<KeyFrame> keyframes;
     uint32_t upperBoundFrameIndex = 0;
@@ -593,13 +593,128 @@ std::vector<Vertex> vertices = {
     Vertex{ glm::vec3( 0.5f, -0.5f, 0.0f ), glm::vec3( 1.0, 1.0, 1.0 ) },
 };
 
-std::vector<uint16_t> indices = { 0, 1, 2, 1, 0, 3 };
+std::vector<uint32_t> indices = { 0, 1, 2, 1, 0, 3 };
 
 SceeneData sceneData = {
     glm::vec3{0.3f, -0.2f, 0.0f}
 };
 */
 
+void createTLAS(Object& object, vk::PhysicalDevice physicalDevice,
+                vk::Device device, vk::CommandPool commandPool,
+                vk::Queue queue, AccelStruct& topAccel, AccelStruct& bottomAccel, Buffer& instanceBuffer) {
+    // Create instance
+
+    glm::mat4 matrix = object.getMatrix(0);
+    vk::TransformMatrixKHR transform = std::array{
+        std::array{matrix[0][0], matrix[1][0], matrix[2][0], matrix[3][0]},
+        std::array{matrix[0][1], matrix[1][1], matrix[2][1], matrix[3][1]},
+        std::array{matrix[0][2], matrix[1][2], matrix[2][2], matrix[3][2]},
+    };
+
+    vk::AccelerationStructureInstanceKHR accelInstance{};
+    accelInstance.setTransform(transform);
+    accelInstance.setInstanceCustomIndex(0);
+    accelInstance.setMask(0xFF);
+    accelInstance.setInstanceShaderBindingTableRecordOffset(0);
+    accelInstance.setFlags(
+        vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable);
+    accelInstance.setAccelerationStructureReference(
+        bottomAccel.buffer.address);
+    // Create buffer for instance
+    instanceBuffer.init(
+        physicalDevice, device,
+        sizeof(vk::AccelerationStructureInstanceKHR),
+        vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR |
+        vk::BufferUsageFlagBits::eShaderDeviceAddress,
+        vk::MemoryPropertyFlagBits::eHostVisible |
+        vk::MemoryPropertyFlagBits::eHostCoherent,
+        &accelInstance);
+    // Create geometry
+    vk::AccelerationStructureGeometryInstancesDataKHR instancesData{};
+    instancesData.setArrayOfPointers(false);
+    instancesData.setData(instanceBuffer.address);
+
+    vk::AccelerationStructureGeometryKHR geometry{};
+    geometry.setGeometryType(vk::GeometryTypeKHR::eInstances);
+    geometry.setGeometry({instancesData});
+    geometry.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
+    // Create and build TLAS
+    constexpr uint32_t primitiveCount = 1;
+    topAccel.init(physicalDevice, device, commandPool, queue,
+                  vk::AccelerationStructureTypeKHR::eTopLevel,
+                  geometry, primitiveCount);
+}
+
+void updateTLAS(Object& object, vk::PhysicalDevice physicalDevice,
+                vk::Device device, vk::CommandPool commandPool,
+                vk::Queue queue, AccelStruct& topAccel, AccelStruct& bottomAccel,
+                Buffer& instanceBuffer, uint32_t frameCount) {
+    // フレームごとにインスタンスデータを更新
+    glm::mat4 matrix = object.getMatrix(frameCount);
+
+    vk::TransformMatrixKHR transform = std::array{
+        std::array{matrix[0][0], matrix[1][0], matrix[2][0], matrix[3][0]},
+        std::array{matrix[0][1], matrix[1][1], matrix[2][1], matrix[3][1]},
+        std::array{matrix[0][2], matrix[1][2], matrix[2][2], matrix[3][2]},
+    };
+
+    vk::AccelerationStructureInstanceKHR accelInstance{};
+    accelInstance.setTransform(transform);
+    accelInstance.setInstanceCustomIndex(0);
+    accelInstance.setMask(0xFF);
+    accelInstance.setInstanceShaderBindingTableRecordOffset(0);
+    accelInstance.setFlags(
+        vk::GeometryInstanceFlagBitsKHR::eTriangleFacingCullDisable);
+    accelInstance.setAccelerationStructureReference(
+        bottomAccel.buffer.address);
+
+    // インスタンスデータをバッファにコピー
+    void* data;
+    device.mapMemory(instanceBuffer.memory.get(), 0, sizeof(accelInstance), {}, &data);
+    memcpy(data, &accelInstance, sizeof(accelInstance));
+    device.unmapMemory(instanceBuffer.memory.get());
+
+    // Create geometry
+    vk::AccelerationStructureGeometryInstancesDataKHR instancesData{};
+    instancesData.setArrayOfPointers(false);
+    instancesData.setData(instanceBuffer.address);
+
+    vk::AccelerationStructureGeometryKHR geometry{};
+    geometry.setGeometryType(vk::GeometryTypeKHR::eInstances);
+    geometry.setGeometry({instancesData});
+    geometry.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
+
+    // TLASの再構築
+    constexpr uint32_t primitiveCount = 1;
+    topAccel.init(physicalDevice, device, commandPool, queue,
+                  vk::AccelerationStructureTypeKHR::eTopLevel, geometry, primitiveCount);
+}
+
+inline vk::UniqueShaderModule createShaderModule(vk::Device device,
+                                                 const std::string& ShaderPath) {
+    size_t fileSz = std::filesystem::file_size(ShaderPath);
+    std::ifstream spvFile(ShaderPath, std::ios_base::binary);
+    std::vector<char> spvFileData(fileSz);
+    spvFile.read(spvFileData.data(), fileSz);
+
+    vk::ShaderModuleCreateInfo createInfo{};
+    createInfo.setCodeSize(fileSz);
+    createInfo.setPCode(reinterpret_cast<const uint32_t*>(spvFileData.data()));
+    return device.createShaderModuleUnique(createInfo);
+}
+
+void addShader(uint32_t shaderIndex,
+                const std::string& filename,
+                vk::ShaderStageFlagBits stage, vk::Device device, 
+                std::vector<vk::UniqueShaderModule>& shaderModules, 
+                std::vector<vk::PipelineShaderStageCreateInfo>& shaderStages) {
+    shaderModules[shaderIndex] =
+        createShaderModule(device, filename);
+    shaderStages[shaderIndex].setStage(stage);
+    shaderStages[shaderIndex].setModule(*shaderModules[shaderIndex]);
+    shaderStages[shaderIndex].setPName("main");
+}
 
 int main() {
     auto requiredLayers = { "VK_LAYER_KHRONOS_validation" };
@@ -799,7 +914,7 @@ int main() {
         std::cout << "Keyframe at " << camera.keyframes.at(i).startFrame << " with easing type " << camera.keyframes.at(i).easingtype << std::endl;
         outputMatrix(camera.viewMatrices.at(i));
     }
-
+/*
     //頂点バッファの作成
     
     vk::BufferCreateInfo vertBufferCreateInfo;
@@ -916,7 +1031,7 @@ int main() {
     //インデックスバッファの作成
     
     vk::BufferCreateInfo indexBufferCreateInfo;
-    indexBufferCreateInfo.size = sizeof(uint16_t) * indexCount;
+    indexBufferCreateInfo.size = sizeof(uint32_t) * indexCount;
     indexBufferCreateInfo.usage = vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst;    // ここだけ注意
     indexBufferCreateInfo.sharingMode = vk::SharingMode::eExclusive;
 
@@ -938,7 +1053,7 @@ int main() {
     //インデックスバッファのステージングバッファの作成
     {
         vk::BufferCreateInfo stagingBufferCreateInfo;
-        stagingBufferCreateInfo.size = sizeof(uint16_t) * indexCount;
+        stagingBufferCreateInfo.size = sizeof(uint32_t) * indexCount;
         stagingBufferCreateInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
         stagingBufferCreateInfo.sharingMode = vk::SharingMode::eExclusive;
 
@@ -959,7 +1074,7 @@ int main() {
 
         void *pStagingBufMem = device->mapMemory(stagingBufMemory.get(), 0, stagingBufMemReq.size);
 
-        std::vector<uint16_t> allIndices;
+        std::vector<uint32_t> allIndices;
 
         uint32_t vertexOffset = 0;
 
@@ -999,7 +1114,7 @@ int main() {
         vk::BufferCopy bufCopy;
         bufCopy.srcOffset = 0;
         bufCopy.dstOffset = 0;
-        bufCopy.size = sizeof(uint16_t) * indexCount;
+        bufCopy.size = sizeof(uint32_t) * indexCount;
 
         vk::CommandBufferBeginInfo cmdBeginInfo;
         cmdBeginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
@@ -1046,7 +1161,7 @@ int main() {
     vertexInputDescription[3].location = 3;
     vertexInputDescription[3].format = vk::Format::eR32Uint;
     vertexInputDescription[3].offset = offsetof(Vertex, objectIndex);
-
+*/
     
 
     //ユニフォームバッファの作成
@@ -1296,7 +1411,7 @@ int main() {
 
     vk::UniqueRenderPass renderpass = device->createRenderPassUnique(renderpassCreateInfo);
 
-    //バーテックスシェーダーの読み込み
+/*    //バーテックスシェーダーの読み込み
 
     std::string vertShaderPath = "../../shader.vert.spv";
     std::string fragShaderPath = "../../shader.frag.spv";
@@ -1332,7 +1447,7 @@ int main() {
     fragShaderCreateInfo.pCode = reinterpret_cast<const uint32_t*>(fragSpvFileData.data());
 
     vk::UniqueShaderModule fragShader = device->createShaderModuleUnique(fragShaderCreateInfo);
-
+*/
     //パイプラインの作成
 
     vk::Viewport viewports[1];
@@ -1352,13 +1467,13 @@ int main() {
     viewportState.pViewports = viewports;
     viewportState.scissorCount = 1;
     viewportState.pScissors = scissors;
-
+/*
     vk::PipelineVertexInputStateCreateInfo vertexInputInfo;
     vertexInputInfo.vertexAttributeDescriptionCount = 4;
     vertexInputInfo.pVertexAttributeDescriptions = vertexInputDescription;
     vertexInputInfo.vertexBindingDescriptionCount = 1;
     vertexInputInfo.pVertexBindingDescriptions = vertexBindingDescription;
-
+*/
     vk::PipelineInputAssemblyStateCreateInfo inputAssembly;
     inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
     inputAssembly.primitiveRestartEnable = false;
@@ -1398,7 +1513,56 @@ int main() {
 
     vk::UniquePipelineLayout pipelineLayout = device->createPipelineLayoutUnique(layoutCreateInfo);
 
-    //シェーダーステージの設定
+    //シェーダーモジュールとシェーダーステージの設定
+
+    std::vector<vk::UniqueShaderModule> shaderModules;
+    std::vector<vk::PipelineShaderStageCreateInfo> shaderStages;
+    std::vector<vk::RayTracingShaderGroupCreateInfoKHR> shaderGroups;
+
+    uint32_t raygenShader = 0;
+    uint32_t missShader = 1;
+    uint32_t chitShader = 2;
+    shaderStages.resize(3);
+    shaderModules.resize(3);
+
+    addShader(raygenShader, "raygen.rgen.spv",
+              vk::ShaderStageFlagBits::eRaygenKHR, device.get(), shaderModules, shaderStages);
+    addShader(missShader, "miss.rmiss.spv",
+              vk::ShaderStageFlagBits::eMissKHR, device.get(), shaderModules, shaderStages);
+    addShader(chitShader, "closesthit.rchit.spv",
+              vk::ShaderStageFlagBits::eClosestHitKHR, device.get(), shaderModules, shaderStages);
+    
+    //シェーダーグループの設定
+    uint32_t raygenGroup = 0;
+    uint32_t missGroup = 1;
+    uint32_t hitGroup = 2;
+    shaderGroups.resize(3);
+
+    // Raygen group
+    shaderGroups[raygenGroup].setType(
+        vk::RayTracingShaderGroupTypeKHR::eGeneral);
+    shaderGroups[raygenGroup].setGeneralShader(raygenShader);
+    shaderGroups[raygenGroup].setClosestHitShader(VK_SHADER_UNUSED_KHR);
+    shaderGroups[raygenGroup].setAnyHitShader(VK_SHADER_UNUSED_KHR);
+    shaderGroups[raygenGroup].setIntersectionShader(VK_SHADER_UNUSED_KHR);
+
+    // Miss group
+    shaderGroups[missGroup].setType(
+        vk::RayTracingShaderGroupTypeKHR::eGeneral);
+    shaderGroups[missGroup].setGeneralShader(missShader);
+    shaderGroups[missGroup].setClosestHitShader(VK_SHADER_UNUSED_KHR);
+    shaderGroups[missGroup].setAnyHitShader(VK_SHADER_UNUSED_KHR);
+    shaderGroups[missGroup].setIntersectionShader(VK_SHADER_UNUSED_KHR);
+
+    // Hit group
+    shaderGroups[hitGroup].setType(
+        vk::RayTracingShaderGroupTypeKHR::eTrianglesHitGroup);
+    shaderGroups[hitGroup].setGeneralShader(VK_SHADER_UNUSED_KHR);
+    shaderGroups[hitGroup].setClosestHitShader(chitShader);
+    shaderGroups[hitGroup].setAnyHitShader(VK_SHADER_UNUSED_KHR);
+    shaderGroups[hitGroup].setIntersectionShader(VK_SHADER_UNUSED_KHR);
+
+/*    //シェーダーステージの設定
     vk::PipelineShaderStageCreateInfo shaderStage[2];
     shaderStage[0].stage = vk::ShaderStageFlagBits::eVertex;
     shaderStage[0].module = vertShader.get();
@@ -1409,7 +1573,7 @@ int main() {
 
     vk::GraphicsPipelineCreateInfo pipelineCreateInfo;
     pipelineCreateInfo.pViewportState = &viewportState;
-    pipelineCreateInfo.pVertexInputState = &vertexInputInfo;
+    //pipelineCreateInfo.pVertexInputState = &vertexInputInfo;
     pipelineCreateInfo.pInputAssemblyState = &inputAssembly;
     pipelineCreateInfo.pRasterizationState = &rasterizer;
     pipelineCreateInfo.pMultisampleState = &multisample;
@@ -1421,7 +1585,7 @@ int main() {
     pipelineCreateInfo.pStages = shaderStage;
 
     vk::UniquePipeline pipeline = device->createGraphicsPipelineUnique(nullptr, pipelineCreateInfo).value;
-
+*/
     //イメージビューの作成
     std::vector<vk::UniqueImageView> swapchainImageViews(swapchainImages.size());
 
@@ -1492,6 +1656,18 @@ int main() {
         bottomLevelAS.push_back(std::move(blas));
     }
 
+    //TLASの作成
+    std::vector<AccelStruct> topLevelAS;
+    std::vector<Buffer> instanceBufs;
+
+    for(int i = 0; i < objects.size(); i++) {
+        AccelStruct tlas;
+        Buffer instanceBuf;
+        createTLAS(objects.at(i), physicalDevice, device.get(), cmdPool.get(), graphicsQueue, tlas, bottomLevelAS.at(i), instanceBuf);
+        topLevelAS.push_back(std::move(tlas));
+        instanceBufs.push_back(std::move(instanceBuf));
+    }
+
     //コマンドバッファの作成
 
     vk::CommandBufferAllocateInfo cmdBufAllocInfo;
@@ -1551,6 +1727,11 @@ int main() {
         // モデル行列を調整したオフセットにコピー
         std::memcpy(static_cast<char*>(pUniformBufMem) + alignedOffset, modelMatrices.data(), modelMatricesSize);
 
+        // TLASの更新
+        for (int i = 0; i < objects.size(); i++) {
+            updateTLAS(objects.at(i), physicalDevice, device.get(), cmdPool.get(), graphicsQueue, topLevelAS.at(i), bottomLevelAS.at(i), instanceBufs.at(i), frameCount);
+        }
+
         // メモリ範囲のフラッシュ
         vk::MappedMemoryRange uniformBufMemoryRange;
         uniformBufMemoryRange.memory = uniformBufMemory.get();
@@ -1592,8 +1773,8 @@ int main() {
             // ここでサブパス0番の処理
 
         cmdBufs[0]->bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.get());
-        cmdBufs[0]->bindVertexBuffers(0, { vertBuf.get() }, { 0 });
-        cmdBufs[0]->bindIndexBuffer(indexBuf.get(), 0, vk::IndexType::eUint16);
+        //cmdBufs[0]->bindVertexBuffers(0, { vertBuf.get() }, { 0 });
+        //cmdBufs[0]->bindIndexBuffer(indexBuf.get(), 0, vk::IndexType::eUint16);
         cmdBufs[0]->bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout.get(), 0, { descSets[0].get() }, {});   //デスクリプタセットのバインド
         
         cmdBufs[0]->drawIndexed(indexCount, 1, 0, 0, 0);

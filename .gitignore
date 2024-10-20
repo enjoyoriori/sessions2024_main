@@ -3,3 +3,6 @@
 /shader.frag.spv
 /shader.vert.spv
 third_party/miniaudio.h
+closesthit.rchit.spv
+miss.rmiss.spv
+raygen.rgen.spv
