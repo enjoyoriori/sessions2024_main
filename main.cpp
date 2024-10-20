@@ -1,4 +1,6 @@
-﻿#include <iostream>
+﻿#define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
+
+#include <iostream>
 #include <vector>
 #include <map>
 #include <fstream>
@@ -8,6 +10,9 @@
 #include <cstring>
 #include <chrono>
 #include <thread>
+#include <functional>
+#include <limits>
+#define NOMINMAX
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -20,6 +25,9 @@ extern "C" {
     #define MINIAUDIO_IMPLEMENTATION
     #include "miniaudio.h"
 }
+
+VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
+
 
 // cmake .. -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg/scripts/buildsystems/vcpkg.cmake
 // cmake --build .
@@ -383,6 +391,199 @@ Camera loadCameraFromCSV(const std::string& filename) {//viewMatrixの読み込�
     return camera;
 };
 
+inline uint32_t getMemoryType(vk::PhysicalDevice physicalDevice,
+                              vk::MemoryRequirements memoryRequirements,
+                              vk::MemoryPropertyFlags memoryProperties) {
+    auto physicalDeviceMemoryProperties = physicalDevice.getMemoryProperties();
+    for (uint32_t i = 0; i < VK_MAX_MEMORY_TYPES; ++i) {
+        if (memoryRequirements.memoryTypeBits & (1 << i)) {
+            if ((physicalDeviceMemoryProperties.memoryTypes[i].propertyFlags &
+                 memoryProperties) == memoryProperties) {
+                return i;
+            }
+        }
+    }
+
+    std::cerr << "Failed to get memory type index.\n";
+    std::abort();
+}
+
+inline void oneTimeSubmit(vk::Device device,
+                          vk::CommandPool commandPool,
+                          vk::Queue queue,
+                          const std::function<void(vk::CommandBuffer)>& func) {
+    // Allocate
+    vk::CommandBufferAllocateInfo allocateInfo{};
+    allocateInfo.setCommandPool(commandPool);
+    allocateInfo.setLevel(vk::CommandBufferLevel::ePrimary);
+    allocateInfo.setCommandBufferCount(1);
+    auto commandBuffers = device.allocateCommandBuffersUnique(allocateInfo);
+
+    // Record
+    commandBuffers[0]->begin(vk::CommandBufferBeginInfo{});
+    func(commandBuffers[0].get());
+    commandBuffers[0]->end();
+
+    // Submit
+    vk::UniqueFence fence = device.createFenceUnique({});
+    vk::SubmitInfo submitInfo{};
+    submitInfo.setCommandBuffers(commandBuffers[0].get());
+    queue.submit(submitInfo, fence.get());
+
+    // Wait
+    if (device.waitForFences(fence.get(), true,std::numeric_limits<uint64_t>::max()) != vk::Result::eSuccess) {
+        std::cerr << "Failed to wait for fence.\n";
+        std::abort();
+    }
+}
+
+struct Buffer {
+    vk::UniqueBuffer buffer;
+    vk::UniqueDeviceMemory memory;
+    vk::DeviceAddress address{};
+    void init(vk::PhysicalDevice physicalDevice,
+              vk::Device device,
+              vk::DeviceSize size,
+              vk::BufferUsageFlags usage,
+              vk::MemoryPropertyFlags memoryProperty,
+              const void* data = nullptr) {
+        // Create buffer
+        vk::BufferCreateInfo createInfo{};
+        createInfo.setSize(size);
+        createInfo.setUsage(usage);
+        buffer = device.createBufferUnique(createInfo);
+
+        // Allocate memory
+        vk::MemoryAllocateFlagsInfo allocateFlags{};
+        if (usage & vk::BufferUsageFlagBits::eShaderDeviceAddress) {
+            allocateFlags.flags = vk::MemoryAllocateFlagBits::eDeviceAddress;
+        }
+
+        vk::MemoryRequirements memoryReq =
+            device.getBufferMemoryRequirements(*buffer);
+        uint32_t memoryType = getMemoryType(physicalDevice,  //
+                                                    memoryReq, memoryProperty);
+        vk::MemoryAllocateInfo allocateInfo{};
+        allocateInfo.setAllocationSize(memoryReq.size);
+        allocateInfo.setMemoryTypeIndex(memoryType);
+        allocateInfo.setPNext(&allocateFlags);
+        memory = device.allocateMemoryUnique(allocateInfo);
+        // Bind buffer to memory
+        device.bindBufferMemory(*buffer, *memory, 0);
+        // Copy data
+        if (data) {
+            void* mappedPtr = device.mapMemory(*memory, 0, size);
+            memcpy(mappedPtr, data, size);
+            device.unmapMemory(*memory);
+        }
+        // Get address
+        if (usage & vk::BufferUsageFlagBits::eShaderDeviceAddress) {
+            vk::BufferDeviceAddressInfoKHR addressInfo{};
+            addressInfo.setBuffer(*buffer);
+            address = device.getBufferAddressKHR(&addressInfo);
+        }
+    }
+};
+
+struct AccelStruct {
+    vk::UniqueAccelerationStructureKHR accel;
+    Buffer buffer;
+    void init(vk::PhysicalDevice physicalDevice,
+          vk::Device device,
+          vk::CommandPool commandPool,
+          vk::Queue queue,
+          vk::AccelerationStructureTypeKHR type,
+          vk::AccelerationStructureGeometryKHR geometry,
+          uint32_t primitiveCount) {
+        // Get build info
+        vk::AccelerationStructureBuildGeometryInfoKHR buildInfo{};
+        buildInfo.setType(type);
+        buildInfo.setMode(vk::BuildAccelerationStructureModeKHR::eBuild);
+        buildInfo.setFlags(
+            vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace);
+        buildInfo.setGeometries(geometry);
+
+        vk::AccelerationStructureBuildSizesInfoKHR buildSizes =
+            device.getAccelerationStructureBuildSizesKHR(
+                vk::AccelerationStructureBuildTypeKHR::eDevice, buildInfo,
+                primitiveCount);
+        // Create buffer for AS
+        buffer.init(physicalDevice, device,
+                    buildSizes.accelerationStructureSize,
+                    vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR,
+                    vk::MemoryPropertyFlagBits::eDeviceLocal);
+        // Create AS
+        vk::AccelerationStructureCreateInfoKHR createInfo{};
+        createInfo.setBuffer(*buffer.buffer);
+        createInfo.setSize(buildSizes.accelerationStructureSize);
+        createInfo.setType(type);
+        accel = device.createAccelerationStructureKHRUnique(createInfo);
+        // Create scratch buffer
+        Buffer scratchBuffer;
+        scratchBuffer.init(physicalDevice, device, buildSizes.buildScratchSize,
+                        vk::BufferUsageFlagBits::eStorageBuffer |
+                        vk::BufferUsageFlagBits::eShaderDeviceAddress,
+                        vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+        buildInfo.setDstAccelerationStructure(*accel);
+        buildInfo.setScratchData(scratchBuffer.address);
+        // Build
+        vk::AccelerationStructureBuildRangeInfoKHR buildRangeInfo{};
+        buildRangeInfo.setPrimitiveCount(primitiveCount);
+        buildRangeInfo.setPrimitiveOffset(0);
+        buildRangeInfo.setFirstVertex(0);
+        buildRangeInfo.setTransformOffset(0);
+
+        oneTimeSubmit(          //
+            device, commandPool, queue,  //
+            [&](vk::CommandBuffer commandBuffer) {
+                commandBuffer.buildAccelerationStructuresKHR(buildInfo,
+                                                            &buildRangeInfo);
+            });
+        // Get address
+        vk::AccelerationStructureDeviceAddressInfoKHR addressInfo{};
+        addressInfo.setAccelerationStructure(*accel);
+        buffer.address = device.getAccelerationStructureAddressKHR(addressInfo);
+    }
+};
+
+void createBLAS(Object& object, vk::PhysicalDevice physicalDevice,
+                vk::Device device, vk::CommandPool commandPool,
+                vk::Queue queue, AccelStruct& bottomAccel) {
+    //頂点バッファの作成
+    vk::BufferUsageFlags bufferUsage{
+        vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR |
+        vk::BufferUsageFlagBits::eShaderDeviceAddress};
+    vk::MemoryPropertyFlags memoryProperty{
+        vk::MemoryPropertyFlagBits::eHostVisible |
+        vk::MemoryPropertyFlagBits::eHostCoherent};
+    Buffer vertexBuffer;
+    Buffer indexBuffer;
+    vertexBuffer.init(physicalDevice, device,
+                      object.vertices.size() * sizeof(Vertex),
+                      bufferUsage, memoryProperty, object.vertices.data());
+    indexBuffer.init(physicalDevice, device,
+                      object.indices.size() * sizeof(uint32_t),
+                      bufferUsage, memoryProperty, object.indices.data());
+    // Create geometry
+    vk::AccelerationStructureGeometryTrianglesDataKHR triangles{};
+    triangles.setVertexFormat(vk::Format::eR32G32B32Sfloat);
+    triangles.setVertexData(vertexBuffer.address);
+    triangles.setVertexStride(sizeof(Vertex));
+    triangles.setMaxVertex(static_cast<uint32_t>(object.vertices.size()));
+    triangles.setIndexType(vk::IndexType::eUint32);
+    triangles.setIndexData(indexBuffer.address);
+
+    vk::AccelerationStructureGeometryKHR geometry{};
+    geometry.setGeometryType(vk::GeometryTypeKHR::eTriangles);
+    geometry.setGeometry({triangles});
+    geometry.setFlags(vk::GeometryFlagBitsKHR::eOpaque);
+    // Create and build BLAS
+    uint32_t primitiveCount = static_cast<uint32_t>(object.indices.size() / 3);
+    bottomAccel.init(physicalDevice, device, commandPool, queue,
+                     vk::AccelerationStructureTypeKHR::eBottomLevel,
+                     geometry, primitiveCount);
+}
 
 /*
 std::vector<Vertex> vertices = {
@@ -603,7 +804,12 @@ int main() {
     
     vk::BufferCreateInfo vertBufferCreateInfo;
     vertBufferCreateInfo.size = sizeof(Vertex) * vertexCount;
-    vertBufferCreateInfo.usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst;
+    vertBufferCreateInfo.usage = 
+        vk::BufferUsageFlagBits::eVertexBuffer |
+        vk::BufferUsageFlagBits::eTransferDst  |
+        vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR |
+        vk::BufferUsageFlagBits::eShaderDeviceAddress;
+
     vertBufferCreateInfo.sharingMode = vk::SharingMode::eExclusive;
 
     vk::UniqueBuffer vertBuf = device->createBufferUnique(vertBufferCreateInfo);
@@ -811,6 +1017,38 @@ int main() {
         graphicsQueue.waitIdle();
     }
 
+    //頂点入力バインディングデスクリプション
+
+    vk::VertexInputBindingDescription vertexBindingDescription[1];
+    vertexBindingDescription[0].binding = 0;
+    vertexBindingDescription[0].stride = sizeof(Vertex);
+    vertexBindingDescription[0].inputRate = vk::VertexInputRate::eVertex;
+
+    //頂点入力アトリビュートデスクリプション
+
+    vk::VertexInputAttributeDescription vertexInputDescription[4];
+    vertexInputDescription[0].binding = 0;
+    vertexInputDescription[0].location = 0;
+    vertexInputDescription[0].format = vk::Format::eR32G32B32Sfloat;
+    vertexInputDescription[0].offset = offsetof(Vertex, pos);
+
+    vertexInputDescription[1].binding = 0;
+    vertexInputDescription[1].location = 1;
+    vertexInputDescription[1].format = vk::Format::eR32G32B32Sfloat;
+    vertexInputDescription[1].offset = offsetof(Vertex, color);
+
+    vertexInputDescription[2].binding = 0;
+    vertexInputDescription[2].location = 2;
+    vertexInputDescription[2].format = vk::Format::eR32G32B32Sfloat;
+    vertexInputDescription[2].offset = offsetof(Vertex, normal);
+
+    vertexInputDescription[3].binding = 0;
+    vertexInputDescription[3].location = 3;
+    vertexInputDescription[3].format = vk::Format::eR32Uint;
+    vertexInputDescription[3].offset = offsetof(Vertex, objectIndex);
+
+    
+
     //ユニフォームバッファの作成
 
     SceeneData sceneData = {
@@ -937,36 +1175,6 @@ int main() {
     writeDescSet[1].pBufferInfo = descBufInfoDynamic;
 
     device->updateDescriptorSets({ writeDescSet }, {});
-    
-    //頂点入力バインディングデスクリプション
-
-    vk::VertexInputBindingDescription vertexBindingDescription[1];
-    vertexBindingDescription[0].binding = 0;
-    vertexBindingDescription[0].stride = sizeof(Vertex);
-    vertexBindingDescription[0].inputRate = vk::VertexInputRate::eVertex;
-
-    //頂点入力アトリビュートデスクリプション
-
-    vk::VertexInputAttributeDescription vertexInputDescription[4];
-    vertexInputDescription[0].binding = 0;
-    vertexInputDescription[0].location = 0;
-    vertexInputDescription[0].format = vk::Format::eR32G32B32Sfloat;
-    vertexInputDescription[0].offset = offsetof(Vertex, pos);
-
-    vertexInputDescription[1].binding = 0;
-    vertexInputDescription[1].location = 1;
-    vertexInputDescription[1].format = vk::Format::eR32G32B32Sfloat;
-    vertexInputDescription[1].offset = offsetof(Vertex, color);
-
-    vertexInputDescription[2].binding = 0;
-    vertexInputDescription[2].location = 2;
-    vertexInputDescription[2].format = vk::Format::eR32G32B32Sfloat;
-    vertexInputDescription[2].offset = offsetof(Vertex, normal);
-
-    vertexInputDescription[3].binding = 0;
-    vertexInputDescription[3].location = 3;
-    vertexInputDescription[3].format = vk::Format::eR32Uint;
-    vertexInputDescription[3].offset = offsetof(Vertex, objectIndex);
 
     //スワップチェインの作成
 
@@ -1275,6 +1483,14 @@ int main() {
     cmdPoolCreateInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
 
     vk ::UniqueCommandPool cmdPool = device->createCommandPoolUnique(cmdPoolCreateInfo);
+
+    //BLASの作成
+    std::vector<AccelStruct> bottomLevelAS;
+    for (auto& object : objects) {
+        AccelStruct blas;
+        createBLAS(object, physicalDevice, device.get(), cmdPool.get(), graphicsQueue, blas);
+        bottomLevelAS.push_back(std::move(blas));
+    }
 
     //コマンドバッファの作成
 
