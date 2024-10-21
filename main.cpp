@@ -585,6 +585,99 @@ void createBLAS(Object& object, vk::PhysicalDevice physicalDevice,
                      geometry, primitiveCount);
 }
 
+inline auto getRayTracingProps(vk::PhysicalDevice physicalDevice) {
+    auto deviceProperties = physicalDevice.getProperties2<
+        vk::PhysicalDeviceProperties2,
+        vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+    return deviceProperties
+        .get<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+}
+
+inline uint32_t alignUp(uint32_t size, uint32_t alignment) {
+    return (size + alignment - 1) & ~(alignment - 1);
+}
+
+void createShaderBindingTable(vk::PhysicalDevice physicalDevice, 
+                              vk::RayGenRegion raygenRegion, 
+                              vk::MissRegion missRegion,
+                              vk::HitRegion hitRegion,) {
+    // Get RT props
+    vk::PhysicalDeviceRayTracingPipelinePropertiesKHR rtProperties =
+        getRayTracingProps(physicalDevice);
+    uint32_t handleSize = rtProperties.shaderGroupHandleSize;
+    uint32_t handleAlignment = rtProperties.shaderGroupHandleAlignment;
+    uint32_t baseAlignment = rtProperties.shaderGroupBaseAlignment;
+    uint32_t handleSizeAligned =
+        alignUp(handleSize, handleAlignment);
+
+    // Set strides and sizes
+    uint32_t raygenShaderCount = 1;  // raygen count must be 1
+    uint32_t missShaderCount = 1;
+    uint32_t hitShaderCount = 1;
+
+    raygenRegion.setStride(alignUp(handleSizeAligned, baseAlignment));
+    raygenRegion.setSize(raygenRegion.stride);
+
+    missRegion.setStride(handleSizeAligned);
+    missRegion.setSize(alignUp(missShaderCount * handleSizeAligned,
+                                        baseAlignment));
+
+    hitRegion.setStride(handleSizeAligned);
+    hitRegion.setSize(alignUp(hitShaderCount * handleSizeAligned,
+                                        baseAlignment));
+    // Create SBT
+    vk::DeviceSize sbtSize =
+        raygenRegion.size + missRegion.size + hitRegion.size;
+    sbt.init(physicalDevice, device, sbtSize,
+             vk::BufferUsageFlagBits::eShaderBindingTableKHR |
+             vk::BufferUsageFlagBits::eTransferSrc |
+             vk::BufferUsageFlagBits::eShaderDeviceAddress,
+             vk::MemoryPropertyFlagBits::eHostVisible |
+             vk::MemoryPropertyFlagBits::eHostCoherent);
+    // Get shader group handles
+    uint32_t handleCount = raygenShaderCount + missShaderCount + hitShaderCount;
+    uint32_t handleStorageSize = handleCount * handleSize;
+    std::vector<uint8_t> handleStorage(handleStorageSize);
+    auto result = device->getRayTracingShaderGroupHandlesKHR(
+        *pipeline, 0, handleCount, handleStorageSize, handleStorage.data());
+    if (result != vk::Result::eSuccess) {
+        std::cerr << "Failed to get ray tracing shader group handles.\n";
+        std::abort();
+    }
+    // Copy handles
+    uint8_t* sbtHead =
+        static_cast<uint8_t*>(device->mapMemory(*sbt.memory, 0, sbtSize));
+
+    uint8_t* dstPtr = sbtHead;
+    auto copyHandle = [&](uint32_t index) {
+        std::memcpy(dstPtr, handleStorage.data() + handleSize * index,
+                    handleSize);
+    };
+
+    // Raygen
+    uint32_t handleIndex = 0;
+    copyHandle(handleIndex++);
+
+    // Miss
+    dstPtr = sbtHead + raygenRegion.size;
+    for (uint32_t c = 0; c < missShaderCount; c++) {
+        copyHandle(handleIndex++);
+        dstPtr += missRegion.stride;
+    }
+
+    // Hit
+    dstPtr = sbtHead + raygenRegion.size + missRegion.size;
+    for (uint32_t c = 0; c < hitShaderCount; c++) {
+        copyHandle(handleIndex++);
+        dstPtr += hitRegion.stride;
+    }
+
+    raygenRegion.setDeviceAddress(sbt.address);
+    missRegion.setDeviceAddress(sbt.address + raygenRegion.size);
+    hitRegion.setDeviceAddress(sbt.address + raygenRegion.size +
+                               missRegion.size);
+}
+
 /*
 std::vector<Vertex> vertices = {
     Vertex{ glm::vec3(-0.5f, -0.5f, 0.0f ), glm::vec3( 0.0, 0.0, 1.0 ) },
@@ -1229,22 +1322,22 @@ int main() {
 
     void* pUniformBufMem = device->mapMemory(uniformBufMemory.get(), 0, uniformBufMemReq.size);
     
-    //デスクリプタセットの作成
+    //デスクリプタセットレイアウトの作成
     
-    vk::DescriptorSetLayoutBinding descSetLayoutBinding[2];
+    std::vector<vk::DescriptorSetLayoutBinding> descSetLayoutBinding(2);
     descSetLayoutBinding[0].binding = 0;
-    descSetLayoutBinding[0].descriptorType = vk::DescriptorType::eUniformBuffer;
+    descSetLayoutBinding[0].descriptorType = vk::DescriptorType::eAccelerationStructureKHR;
     descSetLayoutBinding[0].descriptorCount = 1;
-    descSetLayoutBinding[0].stageFlags = vk::ShaderStageFlagBits::eVertex;
+    descSetLayoutBinding[0].stageFlags = vk::ShaderStageFlagBits::eRaygenKHR;
 
     descSetLayoutBinding[1].binding = 1;
     descSetLayoutBinding[1].descriptorType = vk::DescriptorType::eUniformBuffer;
     descSetLayoutBinding[1].descriptorCount = 1;
-    descSetLayoutBinding[1].stageFlags = vk::ShaderStageFlagBits::eVertex;
+    descSetLayoutBinding[1].stageFlags = vk::ShaderStageFlagBits::eRaygenKHR;
 
     vk::DescriptorSetLayoutCreateInfo descSetLayoutCreateInfo{};
-    descSetLayoutCreateInfo.bindingCount = 2;
-    descSetLayoutCreateInfo.pBindings = descSetLayoutBinding;
+    descSetLayoutCreateInfo.bindingCount = static_cast<uint32_t>(descSetLayoutBinding.size());
+    descSetLayoutCreateInfo.setBindings(descSetLayoutBinding);
 
     vk::UniqueDescriptorSetLayout descSetLayout = device->createDescriptorSetLayoutUnique(descSetLayoutCreateInfo);
 
@@ -1257,7 +1350,7 @@ int main() {
     vk::DescriptorPoolCreateInfo descPoolCreateInfo;
     descPoolCreateInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
     descPoolCreateInfo.poolSizeCount = static_cast<uint32_t>(descPoolSize.size()); // poolSizeCountはdescPoolSizeの要素数
-    descPoolCreateInfo.pPoolSizes = descPoolSize;
+    descPoolCreateInfo.setPoolSizes(descPoolSize);
     descPoolCreateInfo.maxSets = 1;
 
     vk::UniqueDescriptorPool descPool = device->createDescriptorPoolUnique(descPoolCreateInfo);
@@ -1392,7 +1485,7 @@ int main() {
 */
    
     //レンダーパスの作成
-
+/*
     vk::AttachmentDescription attachments[1];
     attachments[0].format = swapchainFormat.format; //謎
     attachments[0].samples = vk::SampleCountFlagBits::e1;
@@ -1421,7 +1514,7 @@ int main() {
     renderpassCreateInfo.pDependencies = nullptr;
 
     vk::UniqueRenderPass renderpass = device->createRenderPassUnique(renderpassCreateInfo);
-
+*/
 /*    //バーテックスシェーダーの読み込み
 
     std::string vertShaderPath = "../../shader.vert.spv";
@@ -1461,7 +1554,7 @@ int main() {
 */
     //パイプラインの作成
 
-    vk::Viewport viewports[1];
+/*    vk::Viewport viewports[1];
     viewports[0].x = 0.0;
     viewports[0].y = 0.0;
     viewports[0].minDepth = 0.0;
@@ -1485,7 +1578,7 @@ int main() {
     vertexInputInfo.vertexBindingDescriptionCount = 1;
     vertexInputInfo.pVertexBindingDescriptions = vertexBindingDescription;
 */
-    vk::PipelineInputAssemblyStateCreateInfo inputAssembly;
+/*    vk::PipelineInputAssemblyStateCreateInfo inputAssembly;
     inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
     inputAssembly.primitiveRestartEnable = false;
 
@@ -1514,15 +1607,8 @@ int main() {
     blend.logicOpEnable = false;
     blend.attachmentCount = 1;
     blend.pAttachments = blendattachment;
-
-    //デスクリプタセットレイアウトをパイプラインに設定
-    auto pipelineDescSetLayouts = { descSetLayout.get() };
-
-    vk::PipelineLayoutCreateInfo layoutCreateInfo;
-    layoutCreateInfo.setLayoutCount = pipelineDescSetLayouts.size();
-    layoutCreateInfo.pSetLayouts = pipelineDescSetLayouts.begin();
-
-    vk::UniquePipelineLayout pipelineLayout = device->createPipelineLayoutUnique(layoutCreateInfo);
+*/
+    
 
     //シェーダーモジュールとシェーダーステージの設定
 
@@ -1572,6 +1658,36 @@ int main() {
     shaderGroups[hitGroup].setClosestHitShader(chitShader);
     shaderGroups[hitGroup].setAnyHitShader(VK_SHADER_UNUSED_KHR);
     shaderGroups[hitGroup].setIntersectionShader(VK_SHADER_UNUSED_KHR);
+
+    //シェーダーバインディングテーブルの作成
+
+    Buffer sbt{};
+    vk::StridedDeviceAddressRegionKHR raygenRegion{};
+    vk::StridedDeviceAddressRegionKHR missRegion{};
+    vk::StridedDeviceAddressRegionKHR hitRegion{};
+
+
+    //パイプラインレイアウトの作成
+    auto pipelineDescSetLayouts = { descSetLayout.get() };
+
+    vk::PipelineLayoutCreateInfo layoutCreateInfo;
+    layoutCreateInfo.setSetLayouts(*descSetLayout);
+
+    vk::UniquePipelineLayout pipelineLayout = device->createPipelineLayoutUnique(layoutCreateInfo);
+
+    //レイトレーシングパイプラインの作成
+    vk::RayTracingPipelineCreateInfoKHR pipelineCreateInfo{};
+    pipelineCreateInfo.setLayout(*pipelineLayout);
+    pipelineCreateInfo.setStages(shaderStages);
+    pipelineCreateInfo.setGroups(shaderGroups);
+    pipelineCreateInfo.setMaxPipelineRayRecursionDepth(1);
+    auto resultPipe = device->createRayTracingPipelineKHRUnique(
+        nullptr, nullptr, pipelineCreateInfo);
+    if (resultPipe.result != vk::Result::eSuccess) {
+        std::cerr << "Failed to create ray tracing pipeline.\n";
+        std::abort();
+    }
+    auto pipeline = std::move(resultPipe.value);
 
 /*    //シェーダーステージの設定
     vk::PipelineShaderStageCreateInfo shaderStage[2];
@@ -1644,7 +1760,7 @@ int main() {
         frameBufCreateInfo.width = surfaceCapabilities.currentExtent.width;
         frameBufCreateInfo.height = surfaceCapabilities.currentExtent.height;
         frameBufCreateInfo.layers = 1;
-        frameBufCreateInfo.renderPass = renderpass.get();
+        //frameBufCreateInfo.renderPass = renderpass.get();
         frameBufCreateInfo.attachmentCount = 1;
         frameBufCreateInfo.pAttachments = frameBufAttachments;
 
@@ -1773,7 +1889,7 @@ int main() {
         clearVal[0].color.float32[3] = 1.0f;
 
         vk::RenderPassBeginInfo renderpassBeginInfo;
-        renderpassBeginInfo.renderPass = renderpass.get();
+        //renderpassBeginInfo.renderPass = renderpass.get();
         renderpassBeginInfo.framebuffer = swapchainFramebufs[imgIndex].get();
         renderpassBeginInfo.renderArea = vk::Rect2D({ 0,0 }, { screenWidth, screenHeight });
         renderpassBeginInfo.clearValueCount = 1;
