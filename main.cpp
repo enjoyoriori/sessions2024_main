@@ -1249,16 +1249,14 @@ int main() {
     vk::UniqueDescriptorSetLayout descSetLayout = device->createDescriptorSetLayoutUnique(descSetLayoutCreateInfo);
 
     //デスクリプタプールの作成
-
-    vk::DescriptorPoolSize descPoolSize[2];
-    descPoolSize[0].type = vk::DescriptorType::eUniformBuffer;
-    descPoolSize[0].descriptorCount = 1;
-    descPoolSize[1].type = vk::DescriptorType::eUniformBuffer;
-    descPoolSize[1].descriptorCount = 1;
+    std::vector<vk::DescriptorPoolSize> descPoolSize = {
+        {vk::DescriptorType::eAccelerationStructureKHR, 1},
+        {vk::DescriptorType::eUniformBuffer, 1}
+    };
 
     vk::DescriptorPoolCreateInfo descPoolCreateInfo;
     descPoolCreateInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
-    descPoolCreateInfo.poolSizeCount = 2;
+    descPoolCreateInfo.poolSizeCount = static_cast<uint32_t>(descPoolSize.size()); // poolSizeCountはdescPoolSizeの要素数
     descPoolCreateInfo.pPoolSizes = descPoolSize;
     descPoolCreateInfo.maxSets = 1;
 
