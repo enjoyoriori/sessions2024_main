@@ -80,7 +80,7 @@ struct Vertex {
     uint32_t objectIndex;
 };
 
-struct SceeneData {
+struct SceneData {
     //glm::mat4 modelMatrix; モデル行列は別で送る
     glm::mat4 viewMatrix;
     glm::mat4 projectionMatrix;
@@ -595,17 +595,24 @@ std::vector<Vertex> vertices = {
 
 std::vector<uint32_t> indices = { 0, 1, 2, 1, 0, 3 };
 
-SceeneData sceneData = {
+SceneData sceneData = {
     glm::vec3{0.3f, -0.2f, 0.0f}
 };
 */
 
-void createTLAS(Object& object, vk::PhysicalDevice physicalDevice,
+void createTLAS(Object& object, SceneData scenedata, vk::PhysicalDevice physicalDevice,
                 vk::Device device, vk::CommandPool commandPool,
                 vk::Queue queue, AccelStruct& topAccel, AccelStruct& bottomAccel, Buffer& instanceBuffer) {
     // Create instance
 
     glm::mat4 matrix = object.getMatrix(0);
+    glm::mat4 viewMatrix = scenedata.viewMatrix;
+    
+    glm::mat4 projectionMatrix = scenedata.projectionMatrix;
+    projectionMatrix[1][1] *= -1; // Y軸反転
+
+    matrix = projectionMatrix * viewMatrix * matrix;
+
     vk::TransformMatrixKHR transform = std::array{
         std::array{matrix[0][0], matrix[1][0], matrix[2][0], matrix[3][0]},
         std::array{matrix[0][1], matrix[1][1], matrix[2][1], matrix[3][1]},
@@ -646,12 +653,18 @@ void createTLAS(Object& object, vk::PhysicalDevice physicalDevice,
                   geometry, primitiveCount);
 }
 
-void updateTLAS(Object& object, vk::PhysicalDevice physicalDevice,
+void updateTLAS(Object& object, SceneData sceneData, vk::PhysicalDevice physicalDevice,
                 vk::Device device, vk::CommandPool commandPool,
                 vk::Queue queue, AccelStruct& topAccel, AccelStruct& bottomAccel,
                 Buffer& instanceBuffer, uint32_t frameCount) {
     // フレームごとにインスタンスデータを更新
     glm::mat4 matrix = object.getMatrix(frameCount);
+    glm::mat4 viewMatrix = sceneData.viewMatrix;
+    
+    glm::mat4 projectionMatrix = sceneData.projectionMatrix;
+    projectionMatrix[1][1] *= -1; // Y軸反転
+
+    matrix = projectionMatrix * viewMatrix * matrix;
 
     vk::TransformMatrixKHR transform = std::array{
         std::array{matrix[0][0], matrix[1][0], matrix[2][0], matrix[3][0]},
@@ -1166,7 +1179,7 @@ int main() {
 
     //ユニフォームバッファの作成
 
-    SceeneData sceneData = {
+    SceneData sceneData = {
         //glm::mat4(1.0f),
         camera.viewMatrices.at(0),
         camera.projectionMatrices
@@ -1178,7 +1191,7 @@ int main() {
     VkDeviceSize minUniformBufferOffsetAlignment = deviceProperties.limits.minUniformBufferOffsetAlignment;
         
     // シーンデータのサイズ
-    VkDeviceSize sceneDataSize = sizeof(SceeneData);
+    VkDeviceSize sceneDataSize = sizeof(SceneData);
 
     // モデル行列のサイズ
     VkDeviceSize modelMatricesSize = sizeof(glm::mat4) * objects.size();
@@ -1663,7 +1676,7 @@ int main() {
     for(int i = 0; i < objects.size(); i++) {
         AccelStruct tlas;
         Buffer instanceBuf;
-        createTLAS(objects.at(i), physicalDevice, device.get(), cmdPool.get(), graphicsQueue, tlas, bottomLevelAS.at(i), instanceBuf);
+        createTLAS(objects.at(i), sceneData, physicalDevice, device.get(), cmdPool.get(), graphicsQueue, tlas, bottomLevelAS.at(i), instanceBuf);
         topLevelAS.push_back(std::move(tlas));
         instanceBufs.push_back(std::move(instanceBuf));
     }
@@ -1729,7 +1742,7 @@ int main() {
 
         // TLASの更新
         for (int i = 0; i < objects.size(); i++) {
-            updateTLAS(objects.at(i), physicalDevice, device.get(), cmdPool.get(), graphicsQueue, topLevelAS.at(i), bottomLevelAS.at(i), instanceBufs.at(i), frameCount);
+            updateTLAS(objects.at(i), sceneData, physicalDevice, device.get(), cmdPool.get(), graphicsQueue, topLevelAS.at(i), bottomLevelAS.at(i), instanceBufs.at(i), frameCount);
         }
 
         // メモリ範囲のフラッシュ
