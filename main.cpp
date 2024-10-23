@@ -391,6 +391,137 @@ Camera loadCameraFromCSV(const std::string& filename) {//viewMatrixの読み込�
     return camera;
 };
 
+inline uint32_t findGeneralQueueFamily(vk::PhysicalDevice physicalDevice,
+                                       vk::SurfaceKHR surface) {
+    auto queueFamilies = physicalDevice.getQueueFamilyProperties();
+    for (uint32_t i = 0; i < queueFamilies.size(); i++) {
+        vk::Bool32 presentSupport =
+            physicalDevice.getSurfaceSupportKHR(i, surface);
+        if (queueFamilies[i].queueFlags & vk::QueueFlagBits::eGraphics &&
+            presentSupport) {
+            return i;
+        }
+    }
+    std::cerr << "Failed to find general queue family.\n";
+    std::abort();
+}
+
+inline vk::UniqueDevice createLogicalDevice(
+    vk::PhysicalDevice physicalDevice,
+    uint32_t queueFamilyIndex,
+    const std::vector<const char*>& deviceExtensions) {
+    std::cout << "Create device\n";
+
+    float queuePriority = 1.0f;
+    vk::DeviceQueueCreateInfo queueCreateInfo{
+        {}, queueFamilyIndex, 1, &queuePriority};
+
+    vk::DeviceCreateInfo deviceCreateInfo{};
+    deviceCreateInfo.setQueueCreateInfos(queueCreateInfo);
+    deviceCreateInfo.setPEnabledExtensionNames(deviceExtensions);
+
+    vk::StructureChain createInfoChain{
+        deviceCreateInfo,
+        vk::PhysicalDeviceRayTracingPipelineFeaturesKHR{VK_TRUE},
+        vk::PhysicalDeviceAccelerationStructureFeaturesKHR{VK_TRUE},
+        vk::PhysicalDeviceBufferDeviceAddressFeatures{VK_TRUE},
+    };
+
+    vk::UniqueDevice device = physicalDevice.createDeviceUnique(
+        createInfoChain.get<vk::DeviceCreateInfo>());
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(device.get());
+    return device;
+}
+
+inline bool checkLayerSupport(const std::vector<const char*>& layers) {
+    std::vector<vk::LayerProperties> availableLayers =
+        vk::enumerateInstanceLayerProperties();
+
+    for (const char* layerName : layers) {
+        bool layerFound = false;
+        for (const auto& layerProperties : availableLayers) {
+            if (strcmp(layerName, layerProperties.layerName) == 0) {
+                layerFound = true;
+                break;
+            }
+        }
+        if (!layerFound) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static VKAPI_ATTR VkBool32 VKAPI_CALL debugUtilsMessengerCallback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+    VkDebugUtilsMessageTypeFlagsEXT messageTypes,
+    VkDebugUtilsMessengerCallbackDataEXT const* pCallbackData,
+    void* pUserData) {
+    std::cerr << pCallbackData->pMessage << "\n\n";
+    return VK_FALSE;
+}
+
+inline std::vector<const char*> getRequiredExtensions() {
+    uint32_t glfwExtensionCount = 0;
+    const char** glfwExtensions =
+        glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+
+    std::vector<const char*> extensions(glfwExtensions,
+                                        glfwExtensions + glfwExtensionCount);
+    extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    return extensions;
+}
+
+inline vk::DebugUtilsMessengerCreateInfoEXT createDebugCreateInfo() {
+    vk::DebugUtilsMessengerCreateInfoEXT createInfo{};
+    createInfo.setMessageSeverity(
+        vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
+        vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);
+    createInfo.setMessageType(
+        vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
+        vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
+        vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation);
+    createInfo.setPfnUserCallback(&debugUtilsMessengerCallback);
+    return createInfo;
+}
+
+inline vk::UniqueInstance createInstance(
+
+    uint32_t apiVersion,
+    const std::vector<const char*>& layers) {
+    std::cout << "Create instance\n";
+
+    // Setup dynamic loader
+    static vk::DynamicLoader dl;
+    auto vkGetInstanceProcAddr =
+        dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
+
+    // Check layer support
+    if (!checkLayerSupport(layers)) {
+        std::cerr << "Requested layers not available.\n";
+        std::abort();
+    }
+
+    // Create instance
+    vk::ApplicationInfo appInfo{};
+    appInfo.setApiVersion(apiVersion);
+
+    std::vector<const char*> extensions = getRequiredExtensions();
+
+    vk::DebugUtilsMessengerCreateInfoEXT debugCreateInfo =
+        createDebugCreateInfo();
+
+    vk::InstanceCreateInfo instanceCreateInfo{};
+    instanceCreateInfo.setPApplicationInfo(&appInfo);
+    instanceCreateInfo.setPEnabledLayerNames(layers);
+    instanceCreateInfo.setPEnabledExtensionNames(extensions);
+    instanceCreateInfo.setPNext(&debugCreateInfo);
+    vk::UniqueInstance instance = vk::createInstanceUnique(instanceCreateInfo);
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(*instance);
+    return instance;
+}
+
 inline uint32_t getMemoryType(vk::PhysicalDevice physicalDevice,
                               vk::MemoryRequirements memoryRequirements,
                               vk::MemoryPropertyFlags memoryProperties) {
@@ -436,6 +567,128 @@ inline void oneTimeSubmit(vk::Device device,
         std::abort();
     }
 }
+
+inline auto getRayTracingProps(vk::PhysicalDevice physicalDevice) {
+    auto deviceProperties = physicalDevice.getProperties2<
+        vk::PhysicalDeviceProperties2,
+        vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+    return deviceProperties
+        .get<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
+}
+
+inline uint32_t alignUp(uint32_t size, uint32_t alignment) {
+    return (size + alignment - 1) & ~(alignment - 1);
+}
+
+inline void setImageLayout(vk::CommandBuffer commandBuffer,
+                           vk::Image image,
+                           vk::ImageLayout oldImageLayout,
+                           vk::ImageLayout newImageLayout,
+                           vk::ImageSubresourceRange subresourceRange =
+                               {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+                           vk::PipelineStageFlags srcStageMask =
+                               vk::PipelineStageFlagBits::eAllCommands,
+                           vk::PipelineStageFlags dstStageMask =
+                               vk::PipelineStageFlagBits::eAllCommands) {
+    vk::ImageMemoryBarrier imageMemoryBarrier{};
+    imageMemoryBarrier.setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+    imageMemoryBarrier.setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+    imageMemoryBarrier.setImage(image);
+    imageMemoryBarrier.setOldLayout(oldImageLayout);
+    imageMemoryBarrier.setNewLayout(newImageLayout);
+    imageMemoryBarrier.setSubresourceRange(subresourceRange);
+
+    // Source layouts (old)
+    switch (oldImageLayout) {
+        case vk::ImageLayout::eUndefined:
+            imageMemoryBarrier.srcAccessMask = {};
+            break;
+        case vk::ImageLayout::ePreinitialized:
+            imageMemoryBarrier.srcAccessMask = vk::AccessFlagBits::eHostWrite;
+            break;
+        case vk::ImageLayout::eColorAttachmentOptimal:
+            imageMemoryBarrier.srcAccessMask =
+                vk::AccessFlagBits::eColorAttachmentWrite;
+            break;
+        case vk::ImageLayout::eDepthStencilAttachmentOptimal:
+            imageMemoryBarrier.srcAccessMask =
+                vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+            break;
+        case vk::ImageLayout::eTransferSrcOptimal:
+            imageMemoryBarrier.srcAccessMask =
+                vk::AccessFlagBits::eTransferRead;
+            break;
+        case vk::ImageLayout::eTransferDstOptimal:
+            imageMemoryBarrier.srcAccessMask =
+                vk::AccessFlagBits::eTransferWrite;
+            break;
+        case vk::ImageLayout::eShaderReadOnlyOptimal:
+            imageMemoryBarrier.srcAccessMask = vk::AccessFlagBits::eShaderRead;
+            break;
+        default:
+            break;
+    }
+
+    // Target layouts (new)
+    switch (newImageLayout) {
+        case vk::ImageLayout::eTransferDstOptimal:
+            imageMemoryBarrier.dstAccessMask =
+                vk::AccessFlagBits::eTransferWrite;
+            break;
+        case vk::ImageLayout::eTransferSrcOptimal:
+            imageMemoryBarrier.dstAccessMask =
+                vk::AccessFlagBits::eTransferRead;
+            break;
+        case vk::ImageLayout::eColorAttachmentOptimal:
+            imageMemoryBarrier.dstAccessMask =
+                vk::AccessFlagBits::eColorAttachmentWrite;
+            break;
+        case vk::ImageLayout::eDepthStencilAttachmentOptimal:
+            imageMemoryBarrier.dstAccessMask =
+                imageMemoryBarrier.dstAccessMask |
+                vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+            break;
+        case vk::ImageLayout::eShaderReadOnlyOptimal:
+            if (imageMemoryBarrier.srcAccessMask == vk::AccessFlags{}) {
+                imageMemoryBarrier.srcAccessMask =
+                    vk::AccessFlagBits::eHostWrite |
+                    vk::AccessFlagBits::eTransferWrite;
+            }
+            imageMemoryBarrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+            break;
+        default:
+            break;
+    }
+
+    // コマンドバッファにバリアを積む
+    commandBuffer.pipelineBarrier(srcStageMask, dstStageMask,  //
+                                  {}, {}, {}, imageMemoryBarrier);
+}
+
+void createSwapchainImageViews(std::vector<vk::Image> swapchainImages, vk::SurfaceFormatKHR surfaceFormat, vk::Device device, std::vector<vk::UniqueImageView>& swapchainImageViews, vk::CommandPool commandPool, vk::Queue queue) {
+        for (auto image : swapchainImages) {
+            vk::ImageViewCreateInfo createInfo{};
+            createInfo.setImage(image);
+            createInfo.setViewType(vk::ImageViewType::e2D);
+            createInfo.setFormat(surfaceFormat.format);
+            createInfo.setComponents(
+                {vk::ComponentSwizzle::eR, vk::ComponentSwizzle::eG,
+                 vk::ComponentSwizzle::eB, vk::ComponentSwizzle::eA});
+            createInfo.setSubresourceRange(
+                {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
+            swapchainImageViews.push_back(
+                device.createImageViewUnique(createInfo));
+        }
+
+        oneTimeSubmit(
+            device, commandPool, queue, [&](vk::CommandBuffer commandBuffer) {
+                for (auto image : swapchainImages) {
+                    setImageLayout(commandBuffer, image,  //
+                                            vk::ImageLayout::eUndefined,
+                                            vk::ImageLayout::ePresentSrcKHR);
+                }
+            });
+    }
 
 struct Buffer {
     vk::UniqueBuffer buffer;
@@ -585,22 +838,12 @@ void createBLAS(Object& object, vk::PhysicalDevice physicalDevice,
                      geometry, primitiveCount);
 }
 
-inline auto getRayTracingProps(vk::PhysicalDevice physicalDevice) {
-    auto deviceProperties = physicalDevice.getProperties2<
-        vk::PhysicalDeviceProperties2,
-        vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
-    return deviceProperties
-        .get<vk::PhysicalDeviceRayTracingPipelinePropertiesKHR>();
-}
-
-inline uint32_t alignUp(uint32_t size, uint32_t alignment) {
-    return (size + alignment - 1) & ~(alignment - 1);
-}
-
 void createShaderBindingTable(vk::PhysicalDevice physicalDevice, 
-                              vk::RayGenRegion raygenRegion, 
-                              vk::MissRegion missRegion,
-                              vk::HitRegion hitRegion,) {
+                              vk::Device device, 
+                              vk::Pipeline pipeline,
+                              vk::StridedDeviceAddressRegionKHR raygenRegion, 
+                              vk::StridedDeviceAddressRegionKHR missRegion,
+                              vk::StridedDeviceAddressRegionKHR hitRegion) {
     // Get RT props
     vk::PhysicalDeviceRayTracingPipelinePropertiesKHR rtProperties =
         getRayTracingProps(physicalDevice);
@@ -628,6 +871,7 @@ void createShaderBindingTable(vk::PhysicalDevice physicalDevice,
     // Create SBT
     vk::DeviceSize sbtSize =
         raygenRegion.size + missRegion.size + hitRegion.size;
+    Buffer sbt;
     sbt.init(physicalDevice, device, sbtSize,
              vk::BufferUsageFlagBits::eShaderBindingTableKHR |
              vk::BufferUsageFlagBits::eTransferSrc |
@@ -638,15 +882,15 @@ void createShaderBindingTable(vk::PhysicalDevice physicalDevice,
     uint32_t handleCount = raygenShaderCount + missShaderCount + hitShaderCount;
     uint32_t handleStorageSize = handleCount * handleSize;
     std::vector<uint8_t> handleStorage(handleStorageSize);
-    auto result = device->getRayTracingShaderGroupHandlesKHR(
-        *pipeline, 0, handleCount, handleStorageSize, handleStorage.data());
+    auto result = device.getRayTracingShaderGroupHandlesKHR(
+        pipeline, 0, handleCount, handleStorageSize, handleStorage.data());
     if (result != vk::Result::eSuccess) {
         std::cerr << "Failed to get ray tracing shader group handles.\n";
         std::abort();
     }
     // Copy handles
     uint8_t* sbtHead =
-        static_cast<uint8_t*>(device->mapMemory(*sbt.memory, 0, sbtSize));
+        static_cast<uint8_t*>(device.mapMemory(*sbt.memory, 0, sbtSize));
 
     uint8_t* dstPtr = sbtHead;
     auto copyHandle = [&](uint32_t index) {
@@ -799,10 +1043,28 @@ void updateTLAS(Object& object, SceneData sceneData, vk::PhysicalDevice physical
 
 inline vk::UniqueShaderModule createShaderModule(vk::Device device,
                                                  const std::string& ShaderPath) {
-    size_t fileSz = std::filesystem::file_size(ShaderPath);
+    // ファイルサイズを取得
+    size_t fileSz;
+    try {
+        fileSz = std::filesystem::file_size(ShaderPath);
+    } catch (const std::filesystem::filesystem_error& e) {
+        throw std::runtime_error("Failed to get file size: " + std::string(e.what()));
+    }
+
+    // ファイルをバイナリモードで開く
     std::ifstream spvFile(ShaderPath, std::ios_base::binary);
+    if (!spvFile) {
+        throw std::runtime_error("Failed to open file: " + ShaderPath);
+    }
+
+    // ファイルデータを格納するベクターを作成
     std::vector<char> spvFileData(fileSz);
+
+    // ファイルデータを読み込む
     spvFile.read(spvFileData.data(), fileSz);
+    if (!spvFile) {
+        throw std::runtime_error("Failed to read file: " + ShaderPath);
+    }
 
     vk::ShaderModuleCreateInfo createInfo{};
     createInfo.setCodeSize(fileSz);
@@ -822,50 +1084,71 @@ void addShader(uint32_t shaderIndex,
     shaderStages[shaderIndex].setPName("main");
 }
 
+void updateDescriptorSet(vk::ImageView imageView, vk::DescriptorSet descSet, vk::Device device, AccelStruct &topAccel) {
+    std::vector<vk::WriteDescriptorSet> writes(2);
+
+    // [0]: For AS
+    vk::WriteDescriptorSetAccelerationStructureKHR accelInfo{};
+    accelInfo.setAccelerationStructures(topAccel.accel.get());
+    writes[0].setDstSet(descSet);
+    writes[0].setDstBinding(0);
+    writes[0].setDescriptorCount(1);
+    writes[0].setDescriptorType(vk::DescriptorType::eAccelerationStructureKHR);
+    writes[0].setPNext(&accelInfo);
+
+    // [1]: For storage image
+    vk::DescriptorImageInfo imageInfo{};
+    imageInfo.setImageView(imageView);
+    imageInfo.setImageLayout(vk::ImageLayout::eGeneral);
+    writes[1].setDstSet(descSet);
+    writes[1].setDstBinding(1);
+    writes[1].setDescriptorType(vk::DescriptorType::eStorageImage);
+    writes[1].setImageInfo(imageInfo);
+
+    // Update
+    device.updateDescriptorSets(writes, nullptr);
+} 
+
 int main() {
     auto requiredLayers = { "VK_LAYER_KHRONOS_validation" };
-
     //GLFWの初期化
-    if (!glfwInit())
+    if (!glfwInit()){
+        std::cout << "Failed to initialize GLFW" << std::endl;
         return -1;
+    }
 
     //エンジンの初期化
     ma_engine engine;
     if (ma_engine_init(NULL, &engine) != MA_SUCCESS) {
+        std::cout << "Failed to initialize miniaudio" << std::endl;
         return -1;
     }
-    
-
     //インスタンスの作成
+    std::vector<const char*> layers = {
+        "VK_LAYER_KHRONOS_validation",
+    };
 
-    uint32_t requiredExtensionsCount;
-    const char** requiredExtensions = glfwGetRequiredInstanceExtensions(&requiredExtensionsCount);//GLFWが必要とする拡張を取得
-
-    vk::InstanceCreateInfo instCreateInfo;
-
-    instCreateInfo.enabledLayerCount = requiredLayers.size();
-    instCreateInfo.ppEnabledLayerNames = requiredLayers.begin();
-    instCreateInfo.enabledExtensionCount = requiredExtensionsCount;
-    instCreateInfo.ppEnabledExtensionNames = requiredExtensions;
-
-    vk::UniqueInstance instance = vk::createInstanceUnique(instCreateInfo);
+    vk::UniqueInstance instance;
+    instance = createInstance(VK_API_VERSION_1_2, layers);
 
     //ウィンドウの作成
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_DECORATED, GLFW_FALSE); // 縁のないウィンドウを作成
 
+
     GLFWwindow* window;
     window = glfwCreateWindow(screenWidth, screenHeight, "GLFW Test Window", NULL, NULL);
     if (!window) {
         const char* err;
         glfwGetError(&err);
-        std::cout << err << std::endl;
+        std::cout << err << "window crate error" << std::endl;
         glfwTerminate();
         return -1;
     }
 
     VkSurfaceKHR c_surface;
+
     VkResult result = glfwCreateWindowSurface(instance.get(), window, nullptr, &c_surface);
     if (result != VK_SUCCESS) {
         const char* err;
@@ -882,7 +1165,6 @@ int main() {
     vk::UniqueSurfaceKHR surface{ c_surface, instance.get() };
 
     //物理デバイス
-
     std::vector<vk::PhysicalDevice> physicalDevices = instance->enumeratePhysicalDevices();
     vk::PhysicalDevice physicalDevice;
 
@@ -929,66 +1211,21 @@ int main() {
 
     //論理デバイスの作成
 
-    // 機能の有効化
-    vk::PhysicalDeviceBufferDeviceAddressFeaturesKHR bufferDeviceAddrFeatures;
-    bufferDeviceAddrFeatures.bufferDeviceAddress = VK_TRUE;
-
-    vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipelineFeatures;
-    rayTracingPipelineFeatures.rayTracingPipeline = VK_TRUE;
-    rayTracingPipelineFeatures.pNext = &bufferDeviceAddrFeatures;
-
-    vk::PhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures;
-    accelerationStructureFeatures.accelerationStructure = VK_TRUE;
-    accelerationStructureFeatures.pNext = &rayTracingPipelineFeatures;
-
-    vk::PhysicalDeviceDescriptorIndexingFeatures descriptorIndexingFeatures;
-    descriptorIndexingFeatures.shaderUniformBufferArrayNonUniformIndexing = VK_TRUE;
-    descriptorIndexingFeatures.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
-    descriptorIndexingFeatures.runtimeDescriptorArray = VK_TRUE;
-    descriptorIndexingFeatures.pNext = &accelerationStructureFeatures;
-
-    // VkPhysicalDeviceFeatures2の設定
-    vk::PhysicalDeviceFeatures features = physicalDevice.getFeatures();
-
-    vk::PhysicalDeviceFeatures2 physicalDeviceFeatures2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, nullptr,};
-    physicalDeviceFeatures2.features = features;
-    physicalDeviceFeatures2.pNext = &descriptorIndexingFeatures;
-
-    vk::DeviceCreateInfo devCreateInfo;
-
-    auto devRequiredExtensions = {
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME, 
-
-        // Vulkan Raytracing API で必要.
+    std::vector<const char*> deviceExtensions = {
+        // For swapchain
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        // For ray tracing
+        VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME,
         VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
         VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
         VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
-
         VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
-        VK_KHR_SPIRV_1_4_EXTENSION_NAME,
-        VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME,
+    };
 
-        // descriptor indexing に必要.
-        VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
-        };
-    
-    devCreateInfo.enabledExtensionCount = devRequiredExtensions.size();
-    devCreateInfo.ppEnabledExtensionNames = devRequiredExtensions.begin();
-    devCreateInfo.enabledLayerCount = requiredLayers.size();
-    devCreateInfo.ppEnabledLayerNames = requiredLayers.begin();
-    devCreateInfo.pNext = &physicalDeviceFeatures2;
-    
-    //キュー情報の作成
-    vk::DeviceQueueCreateInfo queueCreateInfo[1];
-    queueCreateInfo[0].queueFamilyIndex = graphicsQueueFamilyIndex;
-    queueCreateInfo[0].queueCount = 1;
-    float queuePriorities[1] = {1.0f};
-    queueCreateInfo[0].pQueuePriorities = queuePriorities;
-
-    devCreateInfo.pQueueCreateInfos = queueCreateInfo;
-    devCreateInfo.queueCreateInfoCount = 1;
-
-    vk::UniqueDevice device = physicalDevice.createDeviceUnique(devCreateInfo);
+    uint32_t queueFamilyIndex = findGeneralQueueFamily(physicalDevice, *surface);
+    vk::UniqueDevice device = createLogicalDevice(physicalDevice,
+                                          queueFamilyIndex,
+                                          deviceExtensions);
 
     //キューの取得
     vk::Queue graphicsQueue = device->getQueue(graphicsQueueFamilyIndex, 0);
@@ -1269,6 +1506,22 @@ int main() {
     vertexInputDescription[3].offset = offsetof(Vertex, objectIndex);
 */
     
+    //コマンドプールの作成
+
+    vk::CommandPoolCreateInfo cmdPoolCreateInfo;
+    cmdPoolCreateInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
+    cmdPoolCreateInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
+
+    vk ::UniqueCommandPool cmdPool = device->createCommandPoolUnique(cmdPoolCreateInfo);
+
+    //コマンドバッファの作成
+
+    vk::CommandBufferAllocateInfo cmdBufAllocInfo;
+    cmdBufAllocInfo.commandPool = cmdPool.get();
+    cmdBufAllocInfo.commandBufferCount = 1;
+    cmdBufAllocInfo.level = vk::CommandBufferLevel::ePrimary;
+
+    std::vector<vk::UniqueCommandBuffer> cmdBufs = device->allocateCommandBuffersUnique(cmdBufAllocInfo);
 
     //ユニフォームバッファの作成
 
@@ -1286,6 +1539,26 @@ int main() {
     // シーンデータのサイズ
     VkDeviceSize sceneDataSize = sizeof(SceneData);
 
+    //BLASの作成
+    std::vector<AccelStruct> bottomLevelAS;
+    for (auto& object : objects) {
+        AccelStruct blas;
+        createBLAS(object, physicalDevice, device.get(), cmdPool.get(), graphicsQueue, blas);
+        bottomLevelAS.push_back(std::move(blas));
+    }
+
+    //TLASの作成
+    std::vector<AccelStruct> topLevelAS;
+    std::vector<Buffer> instanceBufs;
+
+    for(int i = 0; i < objects.size(); i++) {
+        AccelStruct tlas;
+        Buffer instanceBuf;
+        createTLAS(objects.at(i), sceneData, physicalDevice, device.get(), cmdPool.get(), graphicsQueue, tlas, bottomLevelAS.at(i), instanceBuf);
+        topLevelAS.push_back(std::move(tlas));
+        instanceBufs.push_back(std::move(instanceBuf));
+    }
+/*
     // モデル行列のサイズ
     VkDeviceSize modelMatricesSize = sizeof(glm::mat4) * objects.size();
 
@@ -1321,7 +1594,7 @@ int main() {
     //メモリマッピング
 
     void* pUniformBufMem = device->mapMemory(uniformBufMemory.get(), 0, uniformBufMemReq.size);
-    
+*/ 
     //デスクリプタセットレイアウトの作成
     
     std::vector<vk::DescriptorSetLayoutBinding> descSetLayoutBinding(2);
@@ -1331,7 +1604,7 @@ int main() {
     descSetLayoutBinding[0].stageFlags = vk::ShaderStageFlagBits::eRaygenKHR;
 
     descSetLayoutBinding[1].binding = 1;
-    descSetLayoutBinding[1].descriptorType = vk::DescriptorType::eUniformBuffer;
+    descSetLayoutBinding[1].descriptorType = vk::DescriptorType::eStorageImage;
     descSetLayoutBinding[1].descriptorCount = 1;
     descSetLayoutBinding[1].stageFlags = vk::ShaderStageFlagBits::eRaygenKHR;
 
@@ -1344,7 +1617,7 @@ int main() {
     //デスクリプタプールの作成
     std::vector<vk::DescriptorPoolSize> descPoolSize = {
         {vk::DescriptorType::eAccelerationStructureKHR, 1},
-        {vk::DescriptorType::eUniformBuffer, 1}
+        {vk::DescriptorType::eStorageImage, 1}
     };
 
     vk::DescriptorPoolCreateInfo descPoolCreateInfo;
@@ -1368,7 +1641,7 @@ int main() {
     std::vector<vk::UniqueDescriptorSet> descSets = device->allocateDescriptorSetsUnique(descSetAllocInfo);
 
     //デスクリプタの更新
-    vk::DescriptorBufferInfo descBufInfo[1];
+/*    vk::DescriptorBufferInfo descBufInfo[1];
     descBufInfo[0].buffer = uniformBuf.get();
     descBufInfo[0].offset = 0;
     descBufInfo[0].range = sceneDataSize;
@@ -1382,9 +1655,8 @@ int main() {
     writeDescSet[0].dstSet = descSets[0].get();
     writeDescSet[0].dstBinding = 0;
     writeDescSet[0].dstArrayElement = 0;
-    writeDescSet[0].descriptorType = vk::DescriptorType::eUniformBuffer;
+    writeDescSet[0].descriptorType = vk::DescriptorType::eAccelerationStructureKHR;
     writeDescSet[0].descriptorCount = 1;
-    writeDescSet[0].pBufferInfo = descBufInfo;
 
     writeDescSet[1].dstSet = descSets[0].get();
     writeDescSet[1].dstBinding = 1;
@@ -1394,7 +1666,9 @@ int main() {
     writeDescSet[1].pBufferInfo = descBufInfoDynamic;
 
     device->updateDescriptorSets({ writeDescSet }, {});
-
+*/
+    
+    
     //スワップチェインの作成
 
     vk::SurfaceCapabilitiesKHR surfaceCapabilities = physicalDevice.getSurfaceCapabilitiesKHR(surface.get());
@@ -1411,7 +1685,7 @@ int main() {
     swapchainCreateInfo.imageColorSpace = swapchainFormat.colorSpace;
     swapchainCreateInfo.imageExtent = surfaceCapabilities.currentExtent;
     swapchainCreateInfo.imageArrayLayers = 1;
-    swapchainCreateInfo.imageUsage = vk::ImageUsageFlagBits::eColorAttachment;
+    swapchainCreateInfo.imageUsage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eStorage;
     swapchainCreateInfo.imageSharingMode = vk::SharingMode::eExclusive;
     swapchainCreateInfo.preTransform = surfaceCapabilities.currentTransform;
     swapchainCreateInfo.presentMode = swapchainPresentMode;
@@ -1420,7 +1694,10 @@ int main() {
     vk::UniqueSwapchainKHR swapchain = device->createSwapchainKHRUnique(swapchainCreateInfo);
 
     //スワップチェインのイメージの取得
-    std::vector<vk::Image> swapchainImages = device->getSwapchainImagesKHR(swapchain.get());
+    std::vector<vk::Image> swapchainImages;
+    swapchainImages = device->getSwapchainImagesKHR(swapchain.get());
+    std::vector<vk::UniqueImageView> swapchainImageViews;
+    createSwapchainImageViews(swapchainImages, swapchainFormat, device.get(), swapchainImageViews, cmdPool.get(), graphicsQueue);
 
     // イメージの作成
 /*
@@ -1622,11 +1899,11 @@ int main() {
     shaderStages.resize(3);
     shaderModules.resize(3);
 
-    addShader(raygenShader, "raygen.rgen.spv",
+    addShader(raygenShader, "../../raygen.rgen.spv",
               vk::ShaderStageFlagBits::eRaygenKHR, device.get(), shaderModules, shaderStages);
-    addShader(missShader, "miss.rmiss.spv",
+    addShader(missShader, "../../miss.rmiss.spv",
               vk::ShaderStageFlagBits::eMissKHR, device.get(), shaderModules, shaderStages);
-    addShader(chitShader, "closesthit.rchit.spv",
+    addShader(chitShader, "../../closesthit.rchit.spv",
               vk::ShaderStageFlagBits::eClosestHitKHR, device.get(), shaderModules, shaderStages);
     
     //シェーダーグループの設定
@@ -1659,19 +1936,11 @@ int main() {
     shaderGroups[hitGroup].setAnyHitShader(VK_SHADER_UNUSED_KHR);
     shaderGroups[hitGroup].setIntersectionShader(VK_SHADER_UNUSED_KHR);
 
-    //シェーダーバインディングテーブルの作成
-
-    Buffer sbt{};
-    vk::StridedDeviceAddressRegionKHR raygenRegion{};
-    vk::StridedDeviceAddressRegionKHR missRegion{};
-    vk::StridedDeviceAddressRegionKHR hitRegion{};
-
-
     //パイプラインレイアウトの作成
     auto pipelineDescSetLayouts = { descSetLayout.get() };
 
     vk::PipelineLayoutCreateInfo layoutCreateInfo;
-    layoutCreateInfo.setSetLayouts(*descSetLayout);
+    layoutCreateInfo.setSetLayouts(pipelineDescSetLayouts);
 
     vk::UniquePipelineLayout pipelineLayout = device->createPipelineLayoutUnique(layoutCreateInfo);
 
@@ -1688,6 +1957,15 @@ int main() {
         std::abort();
     }
     auto pipeline = std::move(resultPipe.value);
+
+    //シェーダーバインディングテーブルの作成
+
+    Buffer sbt{};
+    vk::StridedDeviceAddressRegionKHR raygenRegion{};
+    vk::StridedDeviceAddressRegionKHR missRegion{};
+    vk::StridedDeviceAddressRegionKHR hitRegion{};
+
+    createShaderBindingTable(physicalDevice, device.get(), pipeline.get(), raygenRegion, missRegion, hitRegion);
 
 /*    //シェーダーステージの設定
     vk::PipelineShaderStageCreateInfo shaderStage[2];
@@ -1713,26 +1991,6 @@ int main() {
 
     vk::UniquePipeline pipeline = device->createGraphicsPipelineUnique(nullptr, pipelineCreateInfo).value;
 */
-    //イメージビューの作成
-    std::vector<vk::UniqueImageView> swapchainImageViews(swapchainImages.size());
-
-    for (size_t i = 0; i < swapchainImages.size(); i++) {
-        vk::ImageViewCreateInfo imgViewCreateInfo;
-        imgViewCreateInfo.image = swapchainImages[i];
-        imgViewCreateInfo.viewType = vk::ImageViewType::e2D;
-        imgViewCreateInfo.format = swapchainFormat.format;
-        imgViewCreateInfo.components.r = vk::ComponentSwizzle::eIdentity;
-        imgViewCreateInfo.components.g = vk::ComponentSwizzle::eIdentity;
-        imgViewCreateInfo.components.b = vk::ComponentSwizzle::eIdentity;
-        imgViewCreateInfo.components.a = vk::ComponentSwizzle::eIdentity;
-        imgViewCreateInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-        imgViewCreateInfo.subresourceRange.baseMipLevel = 0;
-        imgViewCreateInfo.subresourceRange.levelCount = 1;
-        imgViewCreateInfo.subresourceRange.baseArrayLayer = 0;
-        imgViewCreateInfo.subresourceRange.layerCount = 1;
-
-        swapchainImageViews[i] = device->createImageViewUnique(imgViewCreateInfo);
-    }
 
     //フレームバッファの作成
 /*
@@ -1749,7 +2007,7 @@ int main() {
 
     vk::UniqueFramebuffer frameBuf = device->createFramebufferUnique(frameBufCreateInfo);
 */
-
+/*
     std::vector<vk::UniqueFramebuffer> swapchainFramebufs(swapchainImages.size());
 
     for (size_t i = 0; i < swapchainImages.size(); i++) {
@@ -1766,43 +2024,7 @@ int main() {
 
         swapchainFramebufs[i] = device->createFramebufferUnique(frameBufCreateInfo);
     }
-
-    //コマンドプールの作成
-
-    vk::CommandPoolCreateInfo cmdPoolCreateInfo;
-    cmdPoolCreateInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
-    cmdPoolCreateInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
-
-    vk ::UniqueCommandPool cmdPool = device->createCommandPoolUnique(cmdPoolCreateInfo);
-
-    //BLASの作成
-    std::vector<AccelStruct> bottomLevelAS;
-    for (auto& object : objects) {
-        AccelStruct blas;
-        createBLAS(object, physicalDevice, device.get(), cmdPool.get(), graphicsQueue, blas);
-        bottomLevelAS.push_back(std::move(blas));
-    }
-
-    //TLASの作成
-    std::vector<AccelStruct> topLevelAS;
-    std::vector<Buffer> instanceBufs;
-
-    for(int i = 0; i < objects.size(); i++) {
-        AccelStruct tlas;
-        Buffer instanceBuf;
-        createTLAS(objects.at(i), sceneData, physicalDevice, device.get(), cmdPool.get(), graphicsQueue, tlas, bottomLevelAS.at(i), instanceBuf);
-        topLevelAS.push_back(std::move(tlas));
-        instanceBufs.push_back(std::move(instanceBuf));
-    }
-
-    //コマンドバッファの作成
-
-    vk::CommandBufferAllocateInfo cmdBufAllocInfo;
-    cmdBufAllocInfo.commandPool = cmdPool.get();
-    cmdBufAllocInfo.commandBufferCount = 1;
-    cmdBufAllocInfo.level = vk::CommandBufferLevel::ePrimary;
-
-    std::vector<vk::UniqueCommandBuffer> cmdBufs = device->allocateCommandBuffersUnique(cmdBufAllocInfo);
+*/
 
     //フェンスの作成
     vk::FenceCreateInfo fenceCreateInfo;
@@ -1831,9 +2053,12 @@ int main() {
         glfwPollEvents();
 
         //aquireNextImageの前にレンダリングが終わるまで待機
-        device->waitForFences({ imgRenderedFence.get() }, VK_TRUE, UINT64_MAX);
-        device->resetFences({ imgRenderedFence.get() });
+        //device->waitForFences({ imgRenderedFence.get() }, VK_TRUE, UINT64_MAX);
+        //device->resetFences({ imgRenderedFence.get() });
 
+        
+
+/*
         //ユニフォームバッファの更新
         //sceneData.modelMatrix = glm::rotate(glm::mat4(1.0f), glm::radians(0.1f * frameCount), glm::vec3(0.0f, 1.0f, 0.0f));
 
@@ -1853,35 +2078,46 @@ int main() {
 
         // モデル行列を調整したオフセットにコピー
         std::memcpy(static_cast<char*>(pUniformBufMem) + alignedOffset, modelMatrices.data(), modelMatricesSize);
-
+*/
         // TLASの更新
         for (int i = 0; i < objects.size(); i++) {
             updateTLAS(objects.at(i), sceneData, physicalDevice, device.get(), cmdPool.get(), graphicsQueue, topLevelAS.at(i), bottomLevelAS.at(i), instanceBufs.at(i), frameCount);
         }
 
-        // メモリ範囲のフラッシュ
+        
+
+/*        // メモリ範囲のフラッシュ
         vk::MappedMemoryRange uniformBufMemoryRange;
         uniformBufMemoryRange.memory = uniformBufMemory.get();
         uniformBufMemoryRange.offset = 0;
         uniformBufMemoryRange.size = uniformBufMemReq.size;
 
         device->flushMappedMemoryRanges({ uniformBufMemoryRange });
+*/
 
+        // Create semaphore
+        
+        vk::UniqueSemaphore imageAvailableSemaphore =
+            device->createSemaphoreUnique({});
 
-        vk::ResultValue acquireImgResult = device->acquireNextImageKHR(swapchain.get(), 1'000'000'000, swapchainImgSemaphore.get());
+        vk::ResultValue acquireImgResult = device->acquireNextImageKHR(swapchain.get(), 1'000'000'000, imageAvailableSemaphore.get());
         if (acquireImgResult.result != vk::Result::eSuccess) {
             std::cerr << "次フレームの取得に失敗しました。" << std::endl;
             return -1;
         }
         uint32_t imgIndex = acquireImgResult.value;
-
+    
         cmdBufs[0]->reset();
+
+        vk::Image image = swapchainImages[imgIndex];
+        
+        updateDescriptorSet(swapchainImageViews.at(imgIndex).get(), descSets.at(0).get(), device.get(), topLevelAS.at(0));
 
         //コマンドの作成
     
         vk::CommandBufferBeginInfo cmdBeginInfo;
         cmdBufs[0]->begin(cmdBeginInfo);
-
+/*
         vk::ClearValue clearVal[1];
         clearVal[0].color.float32[0] = 0.0f;
         clearVal[0].color.float32[1] = 0.0f;
@@ -1902,14 +2138,50 @@ int main() {
         cmdBufs[0]->bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.get());
         //cmdBufs[0]->bindVertexBuffers(0, { vertBuf.get() }, { 0 });
         //cmdBufs[0]->bindIndexBuffer(indexBuf.get(), 0, vk::IndexType::eUint16);
+        
+
         cmdBufs[0]->bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout.get(), 0, { descSets[0].get() }, {});   //デスクリプタセットのバインド
         
         cmdBufs[0]->drawIndexed(indexCount, 1, 0, 0, 0);
 
         cmdBufs[0]->endRenderPass();
+*/
+        // Set image layout to general
+        setImageLayout(cmdBufs[0].get(), image,  //
+                                vk::ImageLayout::ePresentSrcKHR,
+                                vk::ImageLayout::eGeneral);
+
+        // Bind pipeline
+        cmdBufs[0]->bindPipeline(vk::PipelineBindPoint::eRayTracingKHR,
+                                    *pipeline);
+
+        // Bind desc set
+        cmdBufs[0]->bindDescriptorSets(
+            vk::PipelineBindPoint::eRayTracingKHR,  // pipelineBindPoint
+            pipelineLayout.get(),                   // layout
+            0,                                      // firstSet
+            1,                                      // descriptorSetCount
+            &descSets[0].get(),                     // pDescriptorSets
+            0,                                      // dynamicOffsetCount
+            nullptr                                 // pDynamicOffsets
+        );
+
+        // Trace rays
+        cmdBufs[0]->traceRaysKHR(  //
+            raygenRegion,             // raygen
+            missRegion,               // miss
+            hitRegion,                // hit
+            {},                       // callable
+            screenWidth, screenHeight, 1          // width, height, depth
+        );
+
+        // Set image layout to present src
+        setImageLayout(cmdBufs[0].get(), image,  //
+                                vk::ImageLayout::eGeneral,
+                                vk::ImageLayout::ePresentSrcKHR);
 
         cmdBufs[0]->end();
-
+/*
         vk::CommandBuffer submitCmdBuf[1] = {cmdBufs[0].get()};
         vk::SubmitInfo submitInfo;
         submitInfo.commandBufferCount = 1;
@@ -1933,11 +2205,9 @@ int main() {
         vk::PresentInfoKHR presentInfo;
 
         auto presentSwapchains = { swapchain.get() };
-        auto imgIndices = { imgIndex };
-
         presentInfo.swapchainCount = presentSwapchains.size();
         presentInfo.pSwapchains = presentSwapchains.begin();
-        presentInfo.pImageIndices = imgIndices.begin();
+        presentInfo.pImageIndices = &imgIndex;
 
         //待機するセマフォの指定
         vk::Semaphore presentWaitSemaphores[] = { imgRenderedSemaphore.get() };
@@ -1945,22 +2215,42 @@ int main() {
         presentInfo.pWaitSemaphores = presentWaitSemaphores;
 
         graphicsQueue.presentKHR(presentInfo);
+*/
+        
+        // Submit command buffer
+        vk::PipelineStageFlags waitStage{vk::PipelineStageFlagBits::eTopOfPipe};
+        vk::SubmitInfo submitInfo{};
+        submitInfo.setWaitDstStageMask(waitStage);
+        submitInfo.setCommandBuffers(cmdBufs[0].get());
+        submitInfo.setWaitSemaphores(imageAvailableSemaphore.get());
+        graphicsQueue.submit(submitInfo);//エラーの原因かもしれない
 
+        // Wait
+        graphicsQueue.waitIdle();
+
+        vk::PresentInfoKHR presentInfo{};
+        presentInfo.setSwapchains(*swapchain);
+        presentInfo.setImageIndices(imgIndex);
+        if (graphicsQueue.presentKHR(presentInfo) != vk::Result::eSuccess) {
+            std::cerr << "Failed to present.\n";
+            std::abort();
+        }
+        
         // フレームレートを30fpsに制御
         std::cout << "Frame: " << frameCount << std::endl;
         frameCount++;
         
-        double targetFrameDuration = 1000.0 / 30.0; // 30fpsのためのフレーム時間（ミリ秒）
+        double targetFrameDuration = 1000 / 30.0; // 30fpsのためのフレーム時間（ミリ秒）
 
         while(std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - frameStartTime).count() < targetFrameDuration) {
             std::this_thread::sleep_for(std::chrono::milliseconds(0));
         }
-        std::cout << "wateing time: " << std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - frameStartTime).count() << std::endl;
+        std::cout << "wating time: " << std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - frameStartTime).count() << std::endl;
     }
 
     graphicsQueue.waitIdle();
 
-    device->unmapMemory(uniformBufMemory.get());//メモリのアンマップ
+    //device->unmapMemory(uniformBufMemory.get());//メモリのアンマップ
     glfwTerminate();
 
     // サウンドスレッドの終了
