@@ -248,6 +248,13 @@ struct Camera {
     } 
 };
 
+enum AttachmentIndex{
+    AttachmentBackbuffer = 0,
+    AttachmentDepth = 1,
+    AttachmentGBufferPosition = 2,
+    AttachmentGBufferNormal = 3,
+    AttachmentGBufferAlbedo = 4,
+};
 
 std::vector<Object> loadObjectsFromCSV(const std::string& filename) {
     std::ifstream file(filename);
@@ -382,6 +389,7 @@ Camera loadCameraFromCSV(const std::string& filename) {//viewMatrixの読み込�
         }
     return camera;
 };
+
 
 
 /*
@@ -1016,7 +1024,42 @@ int main() {
 
     vk::UniqueImageView imgView = device->createImageViewUnique(imgViewCreateInfo);
 */
-   
+    
+    //DepthPrepass
+    vk::AttachmentReference depthRef;
+    depthRef.attachment = AttachmentDepth;
+    depthRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+    //GBuffer描画パス
+    vk::AttachmentReference gbufferOutput[] = {
+        {
+            AttachmentGBufferPosition,vk::ImageLayout::eColorAttachmentOptimal
+        },
+        {
+            AttachmentGBufferNormal,vk::ImageLayout::eColorAttachmentOptimal
+        },
+        {
+            AttachmentGBufferAlbedo,vk::ImageLayout::eColorAttachmentOptimal
+        }
+    };
+    //ライティングパスで前段のGBufferにアクセス
+    vk::AttachmentReference gbufferInput[] = {
+        {
+            AttachmentGBufferPosition,vk::ImageLayout::eShaderReadOnlyOptimal
+        },
+        {
+            AttachmentGBufferNormal,vk::ImageLayout::eShaderReadOnlyOptimal
+        },
+        {
+            AttachmentGBufferAlbedo,vk::ImageLayout::eShaderReadOnlyOptimal
+        }
+    };
+
+    //最終パスでバックバッファに向けて出力する用
+    vk::AttachmentReference backbufferRef = {
+        AttachmentBackbuffer,vk::ImageLayout::eColorAttachmentOptimal
+    };
+ 
     //レンダーパスの作成
 
     vk::AttachmentDescription attachments[1];
@@ -1033,10 +1076,33 @@ int main() {
     subpass0_attachmentRefs[0].attachment = 0;
     subpass0_attachmentRefs[0].layout = vk::ImageLayout::eColorAttachmentOptimal;
 
-    vk::SubpassDescription subpasses[1];
+/*    vk::SubpassDescription subpasses[1];
     subpasses[0].pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
     subpasses[0].colorAttachmentCount = 1;
     subpasses[0].pColorAttachments = subpass0_attachmentRefs;
+*/
+    //サブパスの設定
+    const uint32_t subpassCount = 5;
+    vk::SubpassDescription subpasses[subpassCount];
+
+    //subpass0 depth prepass
+    subpasses[0].pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+    subpasses[0].pDepthStencilAttachment = &depthRef;
+
+    //subpass1 draw gbuffer
+    subpasses[1].pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+    subpasses[1].colorAttachmentCount = static_cast<uint32_t>(std::size(gbufferOutput));
+    subpasses[1].pColorAttachments = gbufferOutput;
+    subpasses[1].pDepthStencilAttachment = &depthRef;
+
+    //subpass2 lighting
+    subpasses[2].pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+    subpasses[2].inputAttachmentCount = static_cast<uint32_t>(std::size(gbufferInput));
+    subpasses[2].pInputAttachments = gbufferInput;
+    subpasses[2].colorAttachmentCount = 1;
+    subpasses[2].pColorAttachments = &backbufferRef;
+
+
 
     vk::RenderPassCreateInfo renderpassCreateInfo;
     renderpassCreateInfo.attachmentCount = 1;
@@ -1047,6 +1113,8 @@ int main() {
     renderpassCreateInfo.pDependencies = nullptr;
 
     vk::UniqueRenderPass renderpass = device->createRenderPassUnique(renderpassCreateInfo);
+
+    
 
     //バーテックスシェーダーの読み込み
 
