@@ -1,0 +1,22 @@
+#version 450
+
+
+layout(location=0) in vec3 inNormalW;
+layout(location=1) in vec2 inUV0;
+
+layout(set=0,binding=1)
+uniform ModelMeshParamters
+{
+    mat4 world;
+};
+
+layout(set=0,binding=8)
+uniform sampler2D texAlbedo;
+
+void main()
+{
+  vec4 albedo = texture(texAlbedo, inUV0);
+  if(albedo.a < 0.5) {
+    discard;
+  }
+}

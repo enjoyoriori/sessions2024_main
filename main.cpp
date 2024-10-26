@@ -256,6 +256,14 @@ enum AttachmentIndex{
     AttachmentGBufferAlbedo = 4,
 };
 
+uint32_t attachmentCount = AttachmentGBufferAlbedo + 1;
+
+enum Subpass {
+    SubpassDepthPrepass = 0,
+    SubpassGbuffer = 1,
+    SubpassLighting = 2,
+};
+
 std::vector<Object> loadObjectsFromCSV(const std::string& filename) {
     std::ifstream file(filename);
     std::string line;
@@ -1025,6 +1033,7 @@ int main() {
     vk::UniqueImageView imgView = device->createImageViewUnique(imgViewCreateInfo);
 */
     
+    //AttachmentReferenceの作成
     //DepthPrepass
     vk::AttachmentReference depthRef;
     depthRef.attachment = AttachmentDepth;
@@ -1059,22 +1068,51 @@ int main() {
     vk::AttachmentReference backbufferRef = {
         AttachmentBackbuffer,vk::ImageLayout::eColorAttachmentOptimal
     };
+
+    vk::AttachmentReference colorRef{};
+    colorRef.attachment = 0;
+    colorRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
+
  
-    //レンダーパスの作成
+    
 
-    vk::AttachmentDescription attachments[1];
-    attachments[0].format = swapchainFormat.format; //謎
-    attachments[0].samples = vk::SampleCountFlagBits::e1;
-    attachments[0].loadOp = vk::AttachmentLoadOp::eClear;
-    attachments[0].storeOp = vk::AttachmentStoreOp::eStore;
-    attachments[0].stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
-    attachments[0].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
-    attachments[0].initialLayout = vk::ImageLayout::eUndefined;
-    attachments[0].finalLayout = vk::ImageLayout::ePresentSrcKHR;
+    // UI を合成するレンダーパスではカラー/デプスバッファをクリアしない.
+    std::vector<vk::AttachmentDescription> attachments;
+    vk::AttachmentDescription colorTarget, depthTarget;
 
-    vk::AttachmentReference subpass0_attachmentRefs[1];
-    subpass0_attachmentRefs[0].attachment = 0;
-    subpass0_attachmentRefs[0].layout = vk::ImageLayout::eColorAttachmentOptimal;
+    colorTarget.format = vk::Format::eR8G8B8A8Unorm;
+    colorTarget.samples = vk::SampleCountFlagBits::e1;
+    colorTarget.loadOp = vk::AttachmentLoadOp::eLoad;
+    colorTarget.storeOp = vk::AttachmentStoreOp::eStore;
+    colorTarget.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    colorTarget.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    colorTarget.initialLayout = vk::ImageLayout::eColorAttachmentOptimal;
+    colorTarget.finalLayout = vk::ImageLayout::ePresentSrcKHR;
+    
+    depthTarget.format = vk::Format::eD32Sfloat;
+    depthTarget.samples = vk::SampleCountFlagBits::e1;
+    depthTarget.loadOp = vk::AttachmentLoadOp::eLoad;
+    depthTarget.storeOp = vk::AttachmentStoreOp::eStore;
+    depthTarget.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    depthTarget.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    depthTarget.initialLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+    depthTarget.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+    
+    vk::SubpassDescription subpassDesc{};
+    subpassDesc.flags = {};
+    subpassDesc.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+    subpassDesc.inputAttachmentCount = 0;
+    subpassDesc.pInputAttachments = nullptr;
+    subpassDesc.colorAttachmentCount = 1;
+    subpassDesc.pColorAttachments = &colorRef;
+    subpassDesc.pResolveAttachments = nullptr;
+    subpassDesc.pDepthStencilAttachment = &depthRef;
+    subpassDesc.preserveAttachmentCount = 0;
+    subpassDesc.pPreserveAttachments = nullptr;
+
+    attachments.push_back(colorTarget);
+    attachments.push_back(depthTarget);
 
 /*    vk::SubpassDescription subpasses[1];
     subpasses[0].pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
@@ -1082,8 +1120,7 @@ int main() {
     subpasses[0].pColorAttachments = subpass0_attachmentRefs;
 */
     //サブパスの設定
-    const uint32_t subpassCount = 5;
-    vk::SubpassDescription subpasses[subpassCount];
+    vk::SubpassDescription subpasses[3];
 
     //subpass0 depth prepass
     subpasses[0].pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
@@ -1102,19 +1139,74 @@ int main() {
     subpasses[2].colorAttachmentCount = 1;
     subpasses[2].pColorAttachments = &backbufferRef;
 
+    //サブパスの依存関係
+    vk::SubpassDependency dependencies[4];
+    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[0].dstSubpass =  SubpassDepthPrepass;
+    dependencies[0].srcStageMask = vk::PipelineStageFlagBits::eBottomOfPipe;
+    dependencies[0].dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    dependencies[0].srcAccessMask = vk::AccessFlagBits::eMemoryRead;
+    dependencies[0].dstAccessMask = vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite;
+    dependencies[0].dependencyFlags = vk::DependencyFlagBits::eByRegion;
 
+    dependencies[1].srcSubpass = SubpassDepthPrepass;
+    dependencies[1].dstSubpass = SubpassGbuffer;
+    dependencies[1].srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    dependencies[1].dstStageMask = vk::PipelineStageFlagBits::eFragmentShader;
+    dependencies[1].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+    dependencies[1].dstAccessMask = vk::AccessFlagBits::eShaderRead;
+    dependencies[1].dependencyFlags = vk::DependencyFlagBits::eByRegion;
 
+    dependencies[2].srcSubpass = SubpassGbuffer;
+    dependencies[2].dstSubpass = SubpassLighting;
+    dependencies[2].srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    dependencies[2].dstStageMask = vk::PipelineStageFlagBits::eFragmentShader;
+    dependencies[2].srcAccessMask = vk::AccessFlagBits::eColorAttachmentRead;
+    dependencies[2].dstAccessMask = vk::AccessFlagBits::eShaderRead;
+    dependencies[2].dependencyFlags = vk::DependencyFlagBits::eByRegion;
+
+    dependencies[3].srcSubpass = SubpassLighting;
+    dependencies[3].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[3].srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    dependencies[3].dstStageMask = vk::PipelineStageFlagBits::eBottomOfPipe;
+    dependencies[3].srcAccessMask = vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite;
+    dependencies[3].dstAccessMask = vk::AccessFlagBits::eMemoryRead;
+    dependencies[3].dependencyFlags = vk::DependencyFlagBits::eByRegion;
+
+    //レンダーパスの作成
     vk::RenderPassCreateInfo renderpassCreateInfo;
-    renderpassCreateInfo.attachmentCount = 1;
-    renderpassCreateInfo.pAttachments = attachments;
-    renderpassCreateInfo.subpassCount = 1;
+    renderpassCreateInfo.attachmentCount = attachmentCount;
+    renderpassCreateInfo.pAttachments = attachments.data();
+    renderpassCreateInfo.subpassCount = static_cast<uint32_t>(std::size(subpasses));
     renderpassCreateInfo.pSubpasses = subpasses;
-    renderpassCreateInfo.dependencyCount = 0;
-    renderpassCreateInfo.pDependencies = nullptr;
+    renderpassCreateInfo.dependencyCount = static_cast<uint32_t>(std::size(dependencies));
+    renderpassCreateInfo.pDependencies = dependencies;
 
     vk::UniqueRenderPass renderpass = device->createRenderPassUnique(renderpassCreateInfo);
-
     
+    // フレームバッファの準備
+    PrepareFramebuffers();
+    auto imageCount = m_swapchain->GetImageCount();
+    m_fbGbuffers.resize(imageCount);
+
+    for (int i = 0; i < imageCount; ++i) {
+        std::vector<vk::ImageView> fbImageViews{
+            m_swapchain->GetImageView(i),
+            m_depthBuffer.view,
+            m_rtPosition.view, m_rtNormal.view, m_rtAlbedo.view,
+        };
+
+        vk::FramebufferCreateInfo fbCI{};
+        fbCI.renderPass = GetRenderPass("deferred");
+        fbCI.attachmentCount = static_cast<uint32_t>(fbImageViews.size());
+        fbCI.pAttachments = fbImageViews.data();
+        fbCI.width = screenWidth;
+        fbCI.height = screenHeight;
+        fbCI.layers = 1;
+
+        vk::Framebuffer framebuffer = m_device.createFramebuffer(fbCI);
+        m_fbGbuffers[i] = framebuffer;
+    }
 
     //バーテックスシェーダーの読み込み
 
