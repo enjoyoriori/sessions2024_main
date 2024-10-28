@@ -411,7 +411,6 @@ int main() {
     if (ma_engine_init(NULL, &engine) != MA_SUCCESS) {
         return -1;
     }
-    
 
     //インスタンスの作成
 
@@ -497,6 +496,20 @@ int main() {
             existsSuitablePhysicalDevice = true;
             break;
         }
+        // ジオメトリシェーダー機能がサポートされているか確認
+        vk::PhysicalDeviceFeatures deviceFeatures = physicalDevices[i].getFeatures();
+        bool supportsGeometryShader = deviceFeatures.geometryShader;
+
+        if (existsGraphicsQueue && supportsSwapchainExtension && supportsGeometryShader) {
+            physicalDevice = physicalDevices[i];
+            existsSuitablePhysicalDevice = true;
+            break;
+        }
+
+        if (!existsSuitablePhysicalDevice) {
+            std::cerr << "使用可能な物理デバイスがありません。" << std::endl;
+            return -1;
+        }
     }
 
     if (!existsSuitablePhysicalDevice) {
@@ -525,7 +538,14 @@ int main() {
     devCreateInfo.pQueueCreateInfos = queueCreateInfo;
     devCreateInfo.queueCreateInfoCount = 1;
 
+    // 物理デバイス機能の設定
+    vk::PhysicalDeviceFeatures deviceFeatures;
+    deviceFeatures.geometryShader = VK_TRUE; // ジオメトリシェーダー機能を有効にする
+
+    devCreateInfo.pEnabledFeatures = &deviceFeatures; // 機能を論理デバイス作成情報に追加
+
     vk::UniqueDevice device = physicalDevice.createDeviceUnique(devCreateInfo);
+    
 
     //キューの取得
     vk::Queue graphicsQueue = device->getQueue(graphicsQueueFamilyIndex, 0);
