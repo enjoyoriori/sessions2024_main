@@ -1,4 +1,5 @@
 glslc shader.vert -o shader.vert.spv
+glslc shader.geom -o shader.geom.spv
 glslc shader.frag -o shader.frag.spv
 rmdir /s /q build
 mkdir build

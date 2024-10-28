@@ -172,7 +172,6 @@ void playSoundInThread(ma_engine* pEngine, const char* filePath) {
     while (ma_sound_is_playing(&sound)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-
     // 音声オブジェクトの終了
     ma_sound_uninit(&sound);
 }
@@ -1068,6 +1067,19 @@ int main() {
 
     vk::UniqueShaderModule vertShader = device->createShaderModuleUnique(vertShaderCreateInfo);
 
+    //ジオメトリシェーダーの読み込み
+    std::string geomShaderPath = "../../shader.geom.spv";
+    size_t geomSpvFileSz = std::filesystem::file_size(geomShaderPath);
+    std::ifstream geomSpvFile(geomShaderPath, std::ios_base::binary);
+    std::vector<char> geomSpvFileData(geomSpvFileSz);
+    geomSpvFile.read(geomSpvFileData.data(), geomSpvFileSz);
+
+    vk::ShaderModuleCreateInfo geomShaderCreateInfo;
+    geomShaderCreateInfo.codeSize = geomSpvFileSz;
+    geomShaderCreateInfo.pCode = reinterpret_cast<const uint32_t*>(geomSpvFileData.data());
+    vk::UniqueShaderModule geomShader = device->createShaderModuleUnique(geomShaderCreateInfo);
+
+
     //フラグメントシェーダーの読み込み
 
     size_t fragSpvFileSz = std::filesystem::file_size(fragShaderPath);
@@ -1151,13 +1163,18 @@ int main() {
     vk::UniquePipelineLayout pipelineLayout = device->createPipelineLayoutUnique(layoutCreateInfo);
 
     //シェーダーステージの設定
-    vk::PipelineShaderStageCreateInfo shaderStage[2];
+    vk::PipelineShaderStageCreateInfo shaderStage[3];
     shaderStage[0].stage = vk::ShaderStageFlagBits::eVertex;
     shaderStage[0].module = vertShader.get();
     shaderStage[0].pName = "main";
-    shaderStage[1].stage = vk::ShaderStageFlagBits::eFragment;
-    shaderStage[1].module = fragShader.get();
+
+    shaderStage[1].stage = vk::ShaderStageFlagBits::eGeometry;
+    shaderStage[1].module = geomShader.get();
     shaderStage[1].pName = "main";
+
+    shaderStage[2].stage = vk::ShaderStageFlagBits::eFragment;
+    shaderStage[2].module = fragShader.get();
+    shaderStage[2].pName = "main";
 
     vk::GraphicsPipelineCreateInfo pipelineCreateInfo;
     pipelineCreateInfo.pViewportState = &viewportState;
@@ -1169,7 +1186,7 @@ int main() {
     pipelineCreateInfo.layout = pipelineLayout.get();
     pipelineCreateInfo.renderPass = renderpass.get();
     pipelineCreateInfo.subpass = 0;
-    pipelineCreateInfo.stageCount = 2;
+    pipelineCreateInfo.stageCount = 3;
     pipelineCreateInfo.pStages = shaderStage;
 
     vk::UniquePipeline pipeline = device->createGraphicsPipelineUnique(nullptr, pipelineCreateInfo).value;
