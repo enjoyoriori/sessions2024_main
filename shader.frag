@@ -2,6 +2,7 @@
 #extension GL_ARB_separate_shader_objects : enable
 
 layout(location = 0) in vec3 fragmentColor;
+layout(location = 1) in vec3 fragmentDepth; 
 layout(location = 0) out vec4 outColor;
 
 void main() {
@@ -37,4 +38,6 @@ void main() {
 
     // 最終カラーの計算
     outColor = vec4(ambient + diffuse + specular, 1.0);
+    outColor = vec4(normal.xyz,1)
+    ;
 }

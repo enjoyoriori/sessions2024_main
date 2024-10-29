@@ -21,7 +21,8 @@ layout(location = 1) in vec3 inColor;
 layout(location = 2) in vec3 inNormal;
 layout(location = 3) in uint inObjectID;
 
-layout(location = 0) out vec3 fragmentColor;
+layout(location = 0) out vec3 geomColor;
+layout(location = 1) out vec3 geomPos;
 
 void main() {
     mat4 worldView = MVPMatrices.view * objData.model[inObjectID];
@@ -30,5 +31,6 @@ void main() {
     //debugPrintfEXT("inPos: %f %f %f\n", inPos.x, inPos.y, inPos.z);
 
     //gl_Position = vec4(inPos, 1.0);
-    fragmentColor = (inColor) * inObjectID + vec3(0.349, 0.0, 1.0) * (1 - inObjectID);
+    geomColor = (inColor) * inObjectID + vec3(0.349, 0.0, 1.0) * (1 - inObjectID);
+    geomPos =  (objData.model[inObjectID] * vec4(inPos, 1.0)).xyz ;
 }
