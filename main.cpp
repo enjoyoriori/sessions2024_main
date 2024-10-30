@@ -1140,8 +1140,8 @@ int main() {
     device->updateDescriptorSets({ writeDescSet }, {});
 
 
-    //レンダーパスの作成
-
+    //ジオメトリステージ用レンダーパスの作成
+/*
     vk::AttachmentDescription attachments[2];
     attachments[0].format = swapchainFormat.format; //謎
     attachments[0].samples = vk::SampleCountFlagBits::e1;
@@ -1170,7 +1170,7 @@ int main() {
     depthAttachmentRef.attachment = 1;
     depthAttachmentRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
    
-    vk::SubpassDescription subpasses[2];
+    vk::SubpassDescription subpasses[1];
     subpasses[0].pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
     subpasses[0].colorAttachmentCount = 1;
     subpasses[0].pColorAttachments = subpass0_attachmentRefs;
@@ -1185,6 +1185,75 @@ int main() {
     renderpassCreateInfo.pDependencies = nullptr;
 
     vk::UniqueRenderPass renderpass = device->createRenderPassUnique(renderpassCreateInfo);
+*/
+    
+    // Gバッファ用のレンダーパスの作成
+    std::vector<vk::AttachmentDescription> gBufferAttachments(gBufferFormats.size() + 1);   // +1は深度バッファ用
+    for (size_t i = 0; i < gBufferFormats.size(); ++i) {
+        gBufferAttachments[i].format = gBufferFormats[i];
+        gBufferAttachments[i].samples = vk::SampleCountFlagBits::e1;
+        gBufferAttachments[i].loadOp = vk::AttachmentLoadOp::eClear;
+        gBufferAttachments[i].storeOp = vk::AttachmentStoreOp::eStore;
+        gBufferAttachments[i].stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+        gBufferAttachments[i].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+        gBufferAttachments[i].initialLayout = vk::ImageLayout::eUndefined;
+        gBufferAttachments[i].finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    }
+
+    gBufferAttachments[gBufferFormats.size()].format = depthFormat;
+    gBufferAttachments[gBufferFormats.size()].samples = vk::SampleCountFlagBits::e1;
+    gBufferAttachments[gBufferFormats.size()].loadOp = vk::AttachmentLoadOp::eClear;
+    gBufferAttachments[gBufferFormats.size()].storeOp = vk::AttachmentStoreOp::eDontCare;
+    gBufferAttachments[gBufferFormats.size()].stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    gBufferAttachments[gBufferFormats.size()].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    gBufferAttachments[gBufferFormats.size()].initialLayout = vk::ImageLayout::eUndefined;
+    gBufferAttachments[gBufferFormats.size()].finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+    std::vector<vk::AttachmentReference> gBufferColorReferences(gBufferFormats.size());
+    for (size_t i = 0; i < gBufferFormats.size(); ++i) {
+        gBufferColorReferences[i].attachment = i;
+        gBufferColorReferences[i].layout = vk::ImageLayout::eColorAttachmentOptimal;
+    }
+
+    vk::AttachmentReference gBufferDepthReference;
+    gBufferDepthReference.attachment = gBufferFormats.size();
+    gBufferDepthReference.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+    vk::SubpassDescription gBufferSubpass;
+    gBufferSubpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+    gBufferSubpass.colorAttachmentCount = static_cast<uint32_t>(gBufferColorReferences.size());
+    gBufferSubpass.pColorAttachments = gBufferColorReferences.data();
+    gBufferSubpass.pDepthStencilAttachment = &gBufferDepthReference;
+
+    vk::RenderPassCreateInfo gBufferRenderPassInfo;
+    gBufferRenderPassInfo.attachmentCount = static_cast<uint32_t>(gBufferAttachments.size());
+    gBufferRenderPassInfo.pAttachments = gBufferAttachments.data();
+    gBufferRenderPassInfo.subpassCount = 1;
+    gBufferRenderPassInfo.pSubpasses = &gBufferSubpass;
+
+    vk::UniqueRenderPass gBufferRenderPass = device->createRenderPassUnique(gBufferRenderPassInfo);
+
+    // Gバッファ用フレームバッファの作成
+
+    std::vector<vk::UniqueFramebuffer> gBufferFramebuffers(swapchainImages.size());
+
+    for (size_t i = 0; i < swapchainImages.size(); ++i) {
+        std::vector<vk::ImageView> attachments(gBufferFormats.size() + 1);
+        for (size_t j = 0; j < gBufferFormats.size(); ++j) {
+            attachments[j] = gBufferImageViews[j].get();
+        }
+        attachments[gBufferFormats.size()] = depthImageView.get();
+
+        vk::FramebufferCreateInfo framebufferCreateInfo;
+        framebufferCreateInfo.renderPass = gBufferRenderPass.get();
+        framebufferCreateInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+        framebufferCreateInfo.pAttachments = attachments.data();
+        framebufferCreateInfo.width = screenWidth;
+        framebufferCreateInfo.height = screenHeight;
+        framebufferCreateInfo.layers = 1;
+
+        gBufferFramebuffers[i] = device->createFramebufferUnique(framebufferCreateInfo);
+    }
 
     //バーテックスシェーダーの読み込み
 
@@ -1332,7 +1401,7 @@ int main() {
     pipelineCreateInfo.pColorBlendState = &blend;
     pipelineCreateInfo.pDepthStencilState = &depthStencil;
     pipelineCreateInfo.layout = pipelineLayout.get();
-    pipelineCreateInfo.renderPass = renderpass.get();
+    pipelineCreateInfo.renderPass = gBufferRenderPass.get();
     pipelineCreateInfo.subpass = 0;
     pipelineCreateInfo.stageCount = 3;
     pipelineCreateInfo.pStages = shaderStage;
@@ -1485,22 +1554,23 @@ int main() {
         vk::CommandBufferBeginInfo cmdBeginInfo;
         cmdBufs[0]->begin(cmdBeginInfo);
 
-        vk::ClearValue clearVal[2];
-        clearVal[0].color.float32[0] = 0.0f;
-        clearVal[0].color.float32[1] = 0.0f;
-        clearVal[0].color.float32[2] = 0.0f;
-        clearVal[0].color.float32[3] = 1.0f;
+        // Gバッファのクリア
+        std::vector<vk::ClearValue> gBufferClearValues(gBufferFormats.size() + 1);
+        for (size_t i = 0; i < gBufferFormats.size(); ++i) {
+            gBufferClearValues[i].color = vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
+        }
+        gBufferClearValues[gBufferFormats.size()].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
 
-        clearVal[1].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
 
-        vk::RenderPassBeginInfo renderpassBeginInfo;
-        renderpassBeginInfo.renderPass = renderpass.get();
-        renderpassBeginInfo.framebuffer = swapchainFramebufs[imgIndex].get();
-        renderpassBeginInfo.renderArea = vk::Rect2D({ 0,0 }, { screenWidth, screenHeight });
-        renderpassBeginInfo.clearValueCount = static_cast<uint32_t>(std::size(clearVal));
-        renderpassBeginInfo.pClearValues = clearVal;
+        vk::RenderPassBeginInfo gBufferRenderPassBeginInfo;
+        gBufferRenderPassBeginInfo.renderPass = gBufferRenderPass.get();
+        gBufferRenderPassBeginInfo.framebuffer = gBufferFramebuffers[imgIndex].get();
+        gBufferRenderPassBeginInfo.renderArea.offset = vk::Offset2D{0, 0};
+        gBufferRenderPassBeginInfo.renderArea.extent = vk::Extent2D{screenWidth, screenHeight};
+        gBufferRenderPassBeginInfo.clearValueCount = static_cast<uint32_t>(gBufferClearValues.size());
+        gBufferRenderPassBeginInfo.pClearValues = gBufferClearValues.data();
 
-        cmdBufs[0]->beginRenderPass(renderpassBeginInfo, vk::SubpassContents::eInline);
+        cmdBufs[0]->beginRenderPass(gBufferRenderPassBeginInfo, vk::SubpassContents::eInline);
 
             // ここでサブパス0番の処理
 
@@ -1508,7 +1578,6 @@ int main() {
         cmdBufs[0]->bindVertexBuffers(0, { vertBuf.get() }, { 0 });
         cmdBufs[0]->bindIndexBuffer(indexBuf.get(), 0, vk::IndexType::eUint16);
         cmdBufs[0]->bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout.get(), 0, { descSets[0].get() }, {});   //デスクリプタセットのバインド
-        
         cmdBufs[0]->drawIndexed(indexCount, 1, 0, 0, 0);
 
         cmdBufs[0]->endRenderPass();
