@@ -76,6 +76,8 @@ struct SceeneData {
     //glm::mat4 modelMatrix; モデル行列は別で送る
     glm::mat4 viewMatrix;
     glm::mat4 projectionMatrix;
+    glm::mat4 vpInvMatrix;
+    glm::vec3 cameraPos;
 };
 
 void outputMatrix(glm::mat4 matrix) {
@@ -844,19 +846,25 @@ int main() {
     
     //デスクリプタセットの作成
     
-    vk::DescriptorSetLayoutBinding descSetLayoutBinding[2];
+    vk::DescriptorSetLayoutBinding descSetLayoutBinding[3];
     descSetLayoutBinding[0].binding = 0;
     descSetLayoutBinding[0].descriptorType = vk::DescriptorType::eUniformBuffer;
     descSetLayoutBinding[0].descriptorCount = 1;
-    descSetLayoutBinding[0].stageFlags = vk::ShaderStageFlagBits::eVertex;
+    descSetLayoutBinding[0].stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eGeometry | vk::ShaderStageFlagBits::eFragment;
 
     descSetLayoutBinding[1].binding = 1;
     descSetLayoutBinding[1].descriptorType = vk::DescriptorType::eUniformBuffer;
     descSetLayoutBinding[1].descriptorCount = 1;
-    descSetLayoutBinding[1].stageFlags = vk::ShaderStageFlagBits::eVertex;
+    descSetLayoutBinding[1].stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eGeometry | vk::ShaderStageFlagBits::eFragment;
+
+    descSetLayoutBinding[2].binding = 2;
+    descSetLayoutBinding[2].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    descSetLayoutBinding[2].descriptorCount = 1;
+    descSetLayoutBinding[2].stageFlags = vk::ShaderStageFlagBits::eFragment;
+    descSetLayoutBinding[2].pImmutableSamplers = nullptr;
 
     vk::DescriptorSetLayoutCreateInfo descSetLayoutCreateInfo{};
-    descSetLayoutCreateInfo.bindingCount = 2;
+    descSetLayoutCreateInfo.bindingCount = static_cast<uint32_t>(std::size(descSetLayoutBinding));
     descSetLayoutCreateInfo.pBindings = descSetLayoutBinding;
 
     vk::UniqueDescriptorSetLayout descSetLayout = device->createDescriptorSetLayoutUnique(descSetLayoutCreateInfo);
@@ -889,33 +897,7 @@ int main() {
 
     std::vector<vk::UniqueDescriptorSet> descSets = device->allocateDescriptorSetsUnique(descSetAllocInfo);
 
-    //デスクリプタの更新
-    vk::DescriptorBufferInfo descBufInfo[1];
-    descBufInfo[0].buffer = uniformBuf.get();
-    descBufInfo[0].offset = 0;
-    descBufInfo[0].range = sceneDataSize;
-
-    vk::DescriptorBufferInfo descBufInfoDynamic[1];
-    descBufInfoDynamic[0].buffer = uniformBuf.get();
-    descBufInfoDynamic[0].offset = alignedOffset;  // モデル行列はview/projection行列の後に配置
-    descBufInfoDynamic[0].range = modelMatricesSize;    // 各モデル行列のサイズ
-
-    vk::WriteDescriptorSet writeDescSet[2];
-    writeDescSet[0].dstSet = descSets[0].get();
-    writeDescSet[0].dstBinding = 0;
-    writeDescSet[0].dstArrayElement = 0;
-    writeDescSet[0].descriptorType = vk::DescriptorType::eUniformBuffer;
-    writeDescSet[0].descriptorCount = 1;
-    writeDescSet[0].pBufferInfo = descBufInfo;
-
-    writeDescSet[1].dstSet = descSets[0].get();
-    writeDescSet[1].dstBinding = 1;
-    writeDescSet[1].dstArrayElement = 0;
-    writeDescSet[1].descriptorType = vk::DescriptorType::eUniformBuffer;
-    writeDescSet[1].descriptorCount = 1;
-    writeDescSet[1].pBufferInfo = descBufInfoDynamic;
-
-    device->updateDescriptorSets({ writeDescSet }, {});
+    
     
     //頂点入力バインディングデスクリプション
 
@@ -973,6 +955,68 @@ int main() {
 
     //スワップチェインのイメージの取得
     std::vector<vk::Image> swapchainImages = device->getSwapchainImagesKHR(swapchain.get());
+
+    // 深度バッファのフォーマットを選択
+    vk::Format depthFormat = vk::Format::eD32Sfloat;
+
+    // 深度バッファ用のイメージを作成
+    vk::ImageCreateInfo depthImageCreateInfo;
+    depthImageCreateInfo.imageType = vk::ImageType::e2D;
+    depthImageCreateInfo.extent = vk::Extent3D(screenWidth, screenHeight, 1);
+    depthImageCreateInfo.mipLevels = 1;
+    depthImageCreateInfo.arrayLayers = 1;
+    depthImageCreateInfo.format = depthFormat;
+    depthImageCreateInfo.tiling = vk::ImageTiling::eOptimal;
+    depthImageCreateInfo.initialLayout = vk::ImageLayout::eUndefined;
+    depthImageCreateInfo.usage =  vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled; // 修正: VK_IMAGE_USAGE_SAMPLED_BITを追加
+    depthImageCreateInfo.sharingMode = vk::SharingMode::eExclusive;
+    depthImageCreateInfo.samples = vk::SampleCountFlagBits::e1;
+
+    vk::UniqueImage depthImage = device->createImageUnique(depthImageCreateInfo);
+
+    // 深度バッファ用のメモリを割り当て
+    vk::MemoryRequirements depthMemReq = device->getImageMemoryRequirements(depthImage.get());
+    vk::MemoryAllocateInfo depthMemAllocInfo;
+    depthMemAllocInfo.allocationSize = depthMemReq.size;
+
+    if(!memoryChecker(physicalDevice.getMemoryProperties(), depthMemReq, depthMemAllocInfo, vk::MemoryPropertyFlagBits::eDeviceLocal)) {
+        return -1;
+    }
+
+    vk::UniqueDeviceMemory depthImageMemory = device->allocateMemoryUnique(depthMemAllocInfo);
+    device->bindImageMemory(depthImage.get(), depthImageMemory.get(), 0);
+
+    // 深度バッファ用のイメージビューを作成
+    vk::ImageViewCreateInfo depthImageViewCreateInfo;
+    depthImageViewCreateInfo.image = depthImage.get();
+    depthImageViewCreateInfo.viewType = vk::ImageViewType::e2D;
+    depthImageViewCreateInfo.format = depthFormat;
+    depthImageViewCreateInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
+    depthImageViewCreateInfo.subresourceRange.baseMipLevel = 0;
+    depthImageViewCreateInfo.subresourceRange.levelCount = 1;
+    depthImageViewCreateInfo.subresourceRange.baseArrayLayer = 0;
+    depthImageViewCreateInfo.subresourceRange.layerCount = 1;
+
+    vk::UniqueImageView depthImageView = device->createImageViewUnique(depthImageViewCreateInfo);
+
+    vk::SamplerCreateInfo samplerInfo = {};
+    samplerInfo.magFilter = vk::Filter::eLinear;
+    samplerInfo.minFilter = vk::Filter::eLinear;
+    samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
+    samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+    samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
+    samplerInfo.anisotropyEnable = VK_FALSE;
+    samplerInfo.maxAnisotropy = 1.0f;
+    samplerInfo.borderColor = vk::BorderColor::eIntOpaqueBlack;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+    samplerInfo.compareEnable = VK_FALSE;
+    samplerInfo.compareOp = vk::CompareOp::eAlways;
+    samplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
+    samplerInfo.mipLodBias = 0.0f;
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = 0.0f;
+
+    vk::UniqueSampler depthSampler = device->createSamplerUnique(samplerInfo);
 
     // イメージの作成
 /*
@@ -1035,10 +1079,50 @@ int main() {
 
     vk::UniqueImageView imgView = device->createImageViewUnique(imgViewCreateInfo);
 */
-   
+   //デスクリプタの更新
+    vk::DescriptorBufferInfo descBufInfo[2];
+    descBufInfo[0].buffer = uniformBuf.get();
+    descBufInfo[0].offset = 0;
+    descBufInfo[0].range = sceneDataSize;
+
+    vk::DescriptorBufferInfo descBufInfoDynamic[1];
+    descBufInfoDynamic[0].buffer = uniformBuf.get();
+    descBufInfoDynamic[0].offset = alignedOffset;  // モデル行列はview/projection行列の後に配置
+    descBufInfoDynamic[0].range = modelMatricesSize;    // 各モデル行列のサイズ
+
+    vk::DescriptorImageInfo depthImageInfo = {};
+    depthImageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    depthImageInfo.imageView = depthImageView.get();
+    depthImageInfo.sampler = depthSampler.get();
+
+    vk::WriteDescriptorSet writeDescSet[3];
+    writeDescSet[0].dstSet = descSets[0].get();
+    writeDescSet[0].dstBinding = 0;
+    writeDescSet[0].dstArrayElement = 0;
+    writeDescSet[0].descriptorType = vk::DescriptorType::eUniformBuffer;
+    writeDescSet[0].descriptorCount = 1;
+    writeDescSet[0].pBufferInfo = descBufInfo;
+
+    writeDescSet[1].dstSet = descSets[0].get();
+    writeDescSet[1].dstBinding = 1;
+    writeDescSet[1].dstArrayElement = 0;
+    writeDescSet[1].descriptorType = vk::DescriptorType::eUniformBuffer;
+    writeDescSet[1].descriptorCount = 1;
+    writeDescSet[1].pBufferInfo = descBufInfoDynamic;
+
+    writeDescSet[2].dstSet = descSets[0].get();
+    writeDescSet[2].dstBinding = 2; // binding 2 の設定
+    writeDescSet[2].dstArrayElement = 0;
+    writeDescSet[2].descriptorType = vk::DescriptorType::eCombinedImageSampler; // デプスバッファのサンプラー
+    writeDescSet[2].descriptorCount = 1;
+    writeDescSet[2].pImageInfo = &depthImageInfo;
+
+    device->updateDescriptorSets({ writeDescSet }, {});
+
+
     //レンダーパスの作成
 
-    vk::AttachmentDescription attachments[1];
+    vk::AttachmentDescription attachments[2];
     attachments[0].format = swapchainFormat.format; //謎
     attachments[0].samples = vk::SampleCountFlagBits::e1;
     attachments[0].loadOp = vk::AttachmentLoadOp::eClear;
@@ -1052,13 +1136,28 @@ int main() {
     subpass0_attachmentRefs[0].attachment = 0;
     subpass0_attachmentRefs[0].layout = vk::ImageLayout::eColorAttachmentOptimal;
 
-    vk::SubpassDescription subpasses[1];
+    // 深度アタッチメントの設定
+    attachments[1].format = depthFormat;
+    attachments[1].samples = vk::SampleCountFlagBits::e1;
+    attachments[1].loadOp = vk::AttachmentLoadOp::eClear;
+    attachments[1].storeOp = vk::AttachmentStoreOp::eDontCare;
+    attachments[1].stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    attachments[1].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    attachments[1].initialLayout = vk::ImageLayout::eUndefined;
+    attachments[1].finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+    vk::AttachmentReference depthAttachmentRef;
+    depthAttachmentRef.attachment = 1;
+    depthAttachmentRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+   
+    vk::SubpassDescription subpasses[2];
     subpasses[0].pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
     subpasses[0].colorAttachmentCount = 1;
     subpasses[0].pColorAttachments = subpass0_attachmentRefs;
+    subpasses[0].pDepthStencilAttachment = &depthAttachmentRef;
 
     vk::RenderPassCreateInfo renderpassCreateInfo;
-    renderpassCreateInfo.attachmentCount = 1;
+    renderpassCreateInfo.attachmentCount = static_cast<uint32_t>(std::size(attachments));
     renderpassCreateInfo.pAttachments = attachments;
     renderpassCreateInfo.subpassCount = 1;
     renderpassCreateInfo.pSubpasses = subpasses;
@@ -1147,6 +1246,14 @@ int main() {
     inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
     inputAssembly.primitiveRestartEnable = false;
 
+    // 深度ステンシルステートの設定
+    vk::PipelineDepthStencilStateCreateInfo depthStencil;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = vk::CompareOp::eLess;
+    depthStencil.depthBoundsTestEnable = VK_FALSE;
+    depthStencil.stencilTestEnable = VK_FALSE;
+
     vk::PipelineRasterizationStateCreateInfo rasterizer;
     rasterizer.depthClampEnable = false;
     rasterizer.rasterizerDiscardEnable = false;
@@ -1203,6 +1310,7 @@ int main() {
     pipelineCreateInfo.pRasterizationState = &rasterizer;
     pipelineCreateInfo.pMultisampleState = &multisample;
     pipelineCreateInfo.pColorBlendState = &blend;
+    pipelineCreateInfo.pDepthStencilState = &depthStencil;
     pipelineCreateInfo.layout = pipelineLayout.get();
     pipelineCreateInfo.renderPass = renderpass.get();
     pipelineCreateInfo.subpass = 0;
@@ -1251,15 +1359,16 @@ int main() {
     std::vector<vk::UniqueFramebuffer> swapchainFramebufs(swapchainImages.size());
 
     for (size_t i = 0; i < swapchainImages.size(); i++) {
-        vk::ImageView frameBufAttachments[1];
+        vk::ImageView frameBufAttachments[2];
         frameBufAttachments[0] = swapchainImageViews[i].get();
+        frameBufAttachments[1] = depthImageView.get();
 
         vk::FramebufferCreateInfo frameBufCreateInfo;
         frameBufCreateInfo.width = surfaceCapabilities.currentExtent.width;
         frameBufCreateInfo.height = surfaceCapabilities.currentExtent.height;
         frameBufCreateInfo.layers = 1;
         frameBufCreateInfo.renderPass = renderpass.get();
-        frameBufCreateInfo.attachmentCount = 1;
+        frameBufCreateInfo.attachmentCount = static_cast<uint32_t>(std::size(attachments));
         frameBufCreateInfo.pAttachments = frameBufAttachments;
 
         swapchainFramebufs[i] = device->createFramebufferUnique(frameBufCreateInfo);
@@ -1318,9 +1427,12 @@ int main() {
         sceneData.viewMatrix = camera.getMatrix(frameCount);
         sceneData.projectionMatrix = camera.projectionMatrices;
         sceneData.projectionMatrix[1][1] *= -1; // Y軸反転
+        sceneData.cameraPos = camera.getMatrix(frameCount)[3];
 
         // シーンデータのコピー
         std::memcpy(pUniformBufMem, &sceneData, sceneDataSize);
+
+
 
         // モデル行列の更新
         std::vector<glm::mat4> modelMatrices(objects.size());
@@ -1347,25 +1459,25 @@ int main() {
             return -1;
         }
         uint32_t imgIndex = acquireImgResult.value;
-
         cmdBufs[0]->reset();
 
-        //コマンドの作成
-    
+        //コマンドの作成    
         vk::CommandBufferBeginInfo cmdBeginInfo;
         cmdBufs[0]->begin(cmdBeginInfo);
 
-        vk::ClearValue clearVal[1];
+        vk::ClearValue clearVal[2];
         clearVal[0].color.float32[0] = 0.0f;
         clearVal[0].color.float32[1] = 0.0f;
         clearVal[0].color.float32[2] = 0.0f;
         clearVal[0].color.float32[3] = 1.0f;
 
+        clearVal[1].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
+
         vk::RenderPassBeginInfo renderpassBeginInfo;
         renderpassBeginInfo.renderPass = renderpass.get();
         renderpassBeginInfo.framebuffer = swapchainFramebufs[imgIndex].get();
         renderpassBeginInfo.renderArea = vk::Rect2D({ 0,0 }, { screenWidth, screenHeight });
-        renderpassBeginInfo.clearValueCount = 1;
+        renderpassBeginInfo.clearValueCount = static_cast<uint32_t>(std::size(clearVal));
         renderpassBeginInfo.pClearValues = clearVal;
 
         cmdBufs[0]->beginRenderPass(renderpassBeginInfo, vk::SubpassContents::eInline);
@@ -1382,6 +1494,8 @@ int main() {
         cmdBufs[0]->endRenderPass();
 
         cmdBufs[0]->end();
+
+        
 
         vk::CommandBuffer submitCmdBuf[1] = {cmdBufs[0].get()};
         vk::SubmitInfo submitInfo;
