@@ -1193,6 +1193,7 @@ int main() {
     shadingPoolSizes[gBufferFormats.size()].descriptorCount = 1;
 
     vk::DescriptorPoolCreateInfo shadingPoolCreateInfo{};
+    shadingPoolCreateInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
     shadingPoolCreateInfo.poolSizeCount = static_cast<uint32_t>(shadingPoolSizes.size());
     shadingPoolCreateInfo.pPoolSizes = shadingPoolSizes.data();
     shadingPoolCreateInfo.maxSets = 1;
@@ -1375,8 +1376,6 @@ int main() {
     vk::UniqueRenderPass lightingRenderPass = device->createRenderPassUnique(renderPassInfo);
 
     // Gバッファ用フレームバッファの作成
-
-
     std::vector<vk::UniqueFramebuffer> gBufferFramebuffers(swapchainImages.size());
 
     for (size_t i = 0; i < swapchainImages.size(); ++i) {
@@ -1397,8 +1396,8 @@ int main() {
         gBufferFramebuffers[i] = device->createFramebufferUnique(framebufferCreateInfo);
     }
 
+    //ジオメトリステージ用のシェーダーの準備
     //バーテックスシェーダーの読み込み
-
     std::string vertShaderPath = "../../shader.vert.spv";
     std::string fragShaderPath = "../../shader.frag.spv";
 
@@ -1410,7 +1409,6 @@ int main() {
     vertSpvFile.read(vertSpvFileData.data(), vertSpvFileSz);
 
     //シェーダーモジュールの作成
-
     vk::ShaderModuleCreateInfo vertShaderCreateInfo;
     vertShaderCreateInfo.codeSize = vertSpvFileSz;
     vertShaderCreateInfo.pCode = reinterpret_cast<const uint32_t*>(vertSpvFileData.data());
@@ -1431,7 +1429,6 @@ int main() {
 
 
     //フラグメントシェーダーの読み込み
-
     size_t fragSpvFileSz = std::filesystem::file_size(fragShaderPath);
 
     std::ifstream fragSpvFile(fragShaderPath, std::ios_base::binary);
@@ -1447,8 +1444,7 @@ int main() {
 
     vk::UniqueShaderModule fragShader = device->createShaderModuleUnique(fragShaderCreateInfo);
 
-    //パイプラインの作成
-
+    //ジオメトリステージ用パイプラインの作成
     vk::Viewport viewports[1];
     viewports[0].x = 0.0;
     viewports[0].y = 0.0;
@@ -1498,18 +1494,16 @@ int main() {
     multisample.sampleShadingEnable = false;
     multisample.rasterizationSamples = vk::SampleCountFlagBits::e1;
 
-    vk::PipelineColorBlendAttachmentState blendattachment[1];
-    blendattachment[0].colorWriteMask =
-        vk::ColorComponentFlagBits::eA |
-        vk::ColorComponentFlagBits::eR |
-        vk::ColorComponentFlagBits::eG |
-        vk::ColorComponentFlagBits::eB;
-    blendattachment[0].blendEnable = false;
+    // ジオメトリステージのカラーブレンドステートの設定
+    vk::PipelineColorBlendAttachmentState geomColorBlendAttachment{};
+    geomColorBlendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+    geomColorBlendAttachment.blendEnable = VK_FALSE;
 
-    vk::PipelineColorBlendStateCreateInfo blend;
-    blend.logicOpEnable = false;
-    blend.attachmentCount = 1;
-    blend.pAttachments = blendattachment;
+    std::array<vk::PipelineColorBlendAttachmentState, 3> geomColorBlendAttachments = { geomColorBlendAttachment, geomColorBlendAttachment, geomColorBlendAttachment };
+
+    vk::PipelineColorBlendStateCreateInfo geomColorBlendState{};
+    geomColorBlendState.attachmentCount = static_cast<uint32_t>(geomColorBlendAttachments.size());
+    geomColorBlendState.pAttachments = geomColorBlendAttachments.data();
 
     //デスクリプタセットレイアウトをパイプラインに設定
     auto pipelineDescSetLayouts = { descSetLayout.get() };
@@ -1540,7 +1534,7 @@ int main() {
     pipelineCreateInfo.pInputAssemblyState = &inputAssembly;
     pipelineCreateInfo.pRasterizationState = &rasterizer;
     pipelineCreateInfo.pMultisampleState = &multisample;
-    pipelineCreateInfo.pColorBlendState = &blend;
+    pipelineCreateInfo.pColorBlendState = &geomColorBlendState;
     pipelineCreateInfo.pDepthStencilState = &depthStencil;
     pipelineCreateInfo.layout = pipelineLayout.get();
     pipelineCreateInfo.renderPass = gBufferRenderPass.get();
@@ -1549,6 +1543,88 @@ int main() {
     pipelineCreateInfo.pStages = shaderStage;
 
     vk::UniquePipeline pipeline = device->createGraphicsPipelineUnique(nullptr, pipelineCreateInfo).value;
+
+    //ライティングステージ用のシェーダーの準備
+    // 頂点シェーダーの読み込み
+    std::string lightVertShaderPath = "../../lighting_shader.vert.spv";
+    size_t lightVertSpvFileSz = std::filesystem::file_size(lightVertShaderPath);
+
+    std::ifstream lightVertSpvFile(lightVertShaderPath, std::ios_base::binary);
+
+    std::vector<char> lightVertSpvFileData(lightVertSpvFileSz);
+    lightVertSpvFile.read(lightVertSpvFileData.data(), lightVertSpvFileSz);
+
+    // 頂点シェーダーモジュールの作成
+    vk::ShaderModuleCreateInfo lightVertShaderCreateInfo;
+    lightVertShaderCreateInfo.codeSize = lightVertSpvFileSz;
+    lightVertShaderCreateInfo.pCode = reinterpret_cast<const uint32_t*>(lightVertSpvFileData.data());
+
+    vk::UniqueShaderModule lightVertShader = device->createShaderModuleUnique(lightVertShaderCreateInfo);
+
+    //フラグメントシェーダーの読み込み
+    std::string lightFragShaderPath = "../../lighting_shader.frag.spv";
+    size_t lightFragSpvFileSz = std::filesystem::file_size(lightFragShaderPath);
+
+    std::ifstream lightFragSpvFile(lightFragShaderPath, std::ios_base::binary);
+
+    std::vector<char> lightFragSpvFileData(lightFragSpvFileSz);
+    lightFragSpvFile.read(lightFragSpvFileData.data(), lightFragSpvFileSz);
+
+    //シェーダーモジュールの作成
+
+    vk::ShaderModuleCreateInfo lightFragShaderCreateInfo;
+    lightFragShaderCreateInfo.codeSize = lightFragSpvFileSz;
+    lightFragShaderCreateInfo.pCode = reinterpret_cast<const uint32_t*>(lightFragSpvFileData.data());
+
+    vk::UniqueShaderModule lightFragShader = device->createShaderModuleUnique(lightFragShaderCreateInfo);
+
+    // シェーダーステージの設定
+    vk::PipelineShaderStageCreateInfo lightingShaderStages[2];
+    lightingShaderStages[0].stage = vk::ShaderStageFlagBits::eVertex;
+    lightingShaderStages[0].module = lightVertShader.get(); // ライティングパス用の頂点シェーダー
+    lightingShaderStages[0].pName = "main";
+
+    lightingShaderStages[1].stage = vk::ShaderStageFlagBits::eFragment;
+    lightingShaderStages[1].module = lightFragShader.get(); // ライティングパス用のフラグメントシェーダー
+    lightingShaderStages[1].pName = "main";
+
+    //ライティングステージ用のカラーブレンドステートの設定
+    vk::PipelineColorBlendAttachmentState lightColorBlendAttachment{};
+    lightColorBlendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+    lightColorBlendAttachment.blendEnable = VK_FALSE;
+
+    std::array<vk::PipelineColorBlendAttachmentState, 1> lightColorBlendAttachments = { lightColorBlendAttachment };
+
+    vk::PipelineColorBlendStateCreateInfo lightColorBlendState{};
+    lightColorBlendState.attachmentCount = static_cast<uint32_t>(lightColorBlendAttachments.size());
+    lightColorBlendState.pAttachments = lightColorBlendAttachments.data();
+
+
+    // パイプラインレイアウトの作成
+    auto lightingPipelineDescSetLayouts = { shadingDescSetLayout.get() };
+
+    vk::PipelineLayoutCreateInfo lightingLayoutCreateInfo;
+    lightingLayoutCreateInfo.setLayoutCount = lightingPipelineDescSetLayouts.size();
+    lightingLayoutCreateInfo.pSetLayouts = lightingPipelineDescSetLayouts.begin();
+
+    vk::UniquePipelineLayout lightingPipelineLayout = device->createPipelineLayoutUnique(lightingLayoutCreateInfo);
+
+    // パイプラインの作成
+    vk::GraphicsPipelineCreateInfo lightingPipelineCreateInfo;
+    lightingPipelineCreateInfo.pViewportState = &viewportState;
+    lightingPipelineCreateInfo.pVertexInputState = &vertexInputInfo;
+    lightingPipelineCreateInfo.pInputAssemblyState = &inputAssembly;
+    lightingPipelineCreateInfo.pRasterizationState = &rasterizer;
+    lightingPipelineCreateInfo.pMultisampleState = &multisample;
+    lightingPipelineCreateInfo.pColorBlendState = &lightColorBlendState;
+    lightingPipelineCreateInfo.pDepthStencilState = &depthStencil;
+    lightingPipelineCreateInfo.layout = lightingPipelineLayout.get();
+    lightingPipelineCreateInfo.renderPass = lightingRenderPass.get();
+    lightingPipelineCreateInfo.subpass = 0;
+    lightingPipelineCreateInfo.stageCount = 2; // シェーダーステージの数を2に設定
+    lightingPipelineCreateInfo.pStages = lightingShaderStages;
+
+    vk::UniquePipeline lightingPipeline = device->createGraphicsPipelineUnique(nullptr, lightingPipelineCreateInfo).value;
 
     //イメージビューの作成
     std::vector<vk::UniqueImageView> swapchainImageViews(swapchainImages.size());
@@ -1605,8 +1681,8 @@ int main() {
         swapchainFramebufs[i] = device->createFramebufferUnique(frameBufCreateInfo);
     }
 
-    //コマンドプールの作成
 
+    //コマンドプールの作成
     vk::CommandPoolCreateInfo cmdPoolCreateInfo;
     cmdPoolCreateInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
     cmdPoolCreateInfo.flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer;
@@ -1614,7 +1690,6 @@ int main() {
     vk ::UniqueCommandPool cmdPool = device->createCommandPoolUnique(cmdPoolCreateInfo);
 
     //コマンドバッファの作成
-
     vk::CommandBufferAllocateInfo cmdBufAllocInfo;
     cmdBufAllocInfo.commandPool = cmdPool.get();
     cmdBufAllocInfo.commandBufferCount = 1;
@@ -1703,7 +1778,7 @@ int main() {
         }
         gBufferClearValues[gBufferFormats.size()].depthStencil = vk::ClearDepthStencilValue(1.0f, 0);
 
-
+        // Gバッファへのレンダリング
         vk::RenderPassBeginInfo gBufferRenderPassBeginInfo;
         gBufferRenderPassBeginInfo.renderPass = gBufferRenderPass.get();
         gBufferRenderPassBeginInfo.framebuffer = gBufferFramebuffers[imgIndex].get();
@@ -1721,7 +1796,25 @@ int main() {
         cmdBufs[0]->bindIndexBuffer(indexBuf.get(), 0, vk::IndexType::eUint16);
         cmdBufs[0]->bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout.get(), 0, { descSets[0].get() }, {});   //デスクリプタセットのバインド
         cmdBufs[0]->drawIndexed(indexCount, 1, 0, 0, 0);
+        cmdBufs[0]->endRenderPass();
 
+        // ライティングパスへのレンダリング
+        std::array<vk::ClearValue, 2> lightingClearValues{};
+        lightingClearValues[0].color = vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
+        lightingClearValues[1].depthStencil = vk::ClearDepthStencilValue{1.0f, 0}; // 深度クリア値を修正
+
+        vk::RenderPassBeginInfo lightingRenderPassBeginInfo;
+        lightingRenderPassBeginInfo.renderPass = lightingRenderPass.get();
+        lightingRenderPassBeginInfo.framebuffer = swapchainFramebufs[imgIndex].get();
+        lightingRenderPassBeginInfo.renderArea.offset = vk::Offset2D{0, 0};
+        lightingRenderPassBeginInfo.renderArea.extent = vk::Extent2D{screenWidth, screenHeight};
+        lightingRenderPassBeginInfo.clearValueCount = 2;
+        lightingRenderPassBeginInfo.pClearValues = lightingClearValues.data();
+
+        cmdBufs[0]->beginRenderPass(lightingRenderPassBeginInfo, vk::SubpassContents::eInline);
+        cmdBufs[0]->bindPipeline(vk::PipelineBindPoint::eGraphics, lightingPipeline.get());
+        cmdBufs[0]->bindDescriptorSets(vk::PipelineBindPoint::eGraphics, lightingPipelineLayout.get(), 0, { shadingDescSet.get() }, {});
+        cmdBufs[0]->draw(6, 1, 0, 0);
         cmdBufs[0]->endRenderPass();
 
         cmdBufs[0]->end();
