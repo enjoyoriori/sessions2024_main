@@ -843,62 +843,7 @@ int main() {
     //メモリマッピング
 
     void* pUniformBufMem = device->mapMemory(uniformBufMemory.get(), 0, uniformBufMemReq.size);
-    
-    //デスクリプタセットの作成
-    
-    vk::DescriptorSetLayoutBinding descSetLayoutBinding[3];
-    descSetLayoutBinding[0].binding = 0;
-    descSetLayoutBinding[0].descriptorType = vk::DescriptorType::eUniformBuffer;
-    descSetLayoutBinding[0].descriptorCount = 1;
-    descSetLayoutBinding[0].stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eGeometry | vk::ShaderStageFlagBits::eFragment;
 
-    descSetLayoutBinding[1].binding = 1;
-    descSetLayoutBinding[1].descriptorType = vk::DescriptorType::eUniformBuffer;
-    descSetLayoutBinding[1].descriptorCount = 1;
-    descSetLayoutBinding[1].stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eGeometry | vk::ShaderStageFlagBits::eFragment;
-
-    descSetLayoutBinding[2].binding = 2;
-    descSetLayoutBinding[2].descriptorType = vk::DescriptorType::eCombinedImageSampler;
-    descSetLayoutBinding[2].descriptorCount = 1;
-    descSetLayoutBinding[2].stageFlags = vk::ShaderStageFlagBits::eFragment;
-    descSetLayoutBinding[2].pImmutableSamplers = nullptr;
-
-    vk::DescriptorSetLayoutCreateInfo descSetLayoutCreateInfo{};
-    descSetLayoutCreateInfo.bindingCount = static_cast<uint32_t>(std::size(descSetLayoutBinding));
-    descSetLayoutCreateInfo.pBindings = descSetLayoutBinding;
-
-    vk::UniqueDescriptorSetLayout descSetLayout = device->createDescriptorSetLayoutUnique(descSetLayoutCreateInfo);
-
-    //デスクリプタプールの作成
-
-    vk::DescriptorPoolSize descPoolSize[2];
-    descPoolSize[0].type = vk::DescriptorType::eUniformBuffer;
-    descPoolSize[0].descriptorCount = 1;
-    descPoolSize[1].type = vk::DescriptorType::eUniformBuffer;
-    descPoolSize[1].descriptorCount = 1;
-
-    vk::DescriptorPoolCreateInfo descPoolCreateInfo;
-    descPoolCreateInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
-    descPoolCreateInfo.poolSizeCount = 2;
-    descPoolCreateInfo.pPoolSizes = descPoolSize;
-    descPoolCreateInfo.maxSets = 1;
-
-    vk::UniqueDescriptorPool descPool = device->createDescriptorPoolUnique(descPoolCreateInfo);
-
-    //デスクリプタセットの作成
-
-    vk::DescriptorSetAllocateInfo descSetAllocInfo;
-
-    auto descSetLayouts = { descSetLayout.get() };
-
-    descSetAllocInfo.descriptorPool = descPool.get();
-    descSetAllocInfo.descriptorSetCount = descSetLayouts.size();
-    descSetAllocInfo.pSetLayouts = descSetLayouts.begin();
-
-    std::vector<vk::UniqueDescriptorSet> descSets = device->allocateDescriptorSetsUnique(descSetAllocInfo);
-
-    
-    
     //頂点入力バインディングデスクリプション
 
     vk::VertexInputBindingDescription vertexBindingDescription[1];
@@ -928,8 +873,10 @@ int main() {
     vertexInputDescription[3].location = 3;
     vertexInputDescription[3].format = vk::Format::eR32Uint;
     vertexInputDescription[3].offset = offsetof(Vertex, objectIndex);
-
+    
+    
     //スワップチェインの作成
+    
 
     vk::SurfaceCapabilitiesKHR surfaceCapabilities = physicalDevice.getSurfaceCapabilitiesKHR(surface.get());
     std::vector<vk::SurfaceFormatKHR> surfaceFormats = physicalDevice.getSurfaceFormatsKHR(surface.get());
@@ -1049,7 +996,6 @@ int main() {
 
         gBufferImageViews[i] = device->createImageViewUnique(imageViewCreateInfo);
     }
-
     // イメージの作成
 /*
     vk::ImageCreateInfo imgCreateInfo;
@@ -1111,8 +1057,60 @@ int main() {
 
     vk::UniqueImageView imgView = device->createImageViewUnique(imgViewCreateInfo);
 */
-   //デスクリプタの更新
-    vk::DescriptorBufferInfo descBufInfo[2];
+    
+    //ジオメトリステージ用デスクリプタの作成
+    //デスクリプタセットレイアウトの作成
+    vk::DescriptorSetLayoutBinding descSetLayoutBinding[3];
+    descSetLayoutBinding[0].binding = 0;
+    descSetLayoutBinding[0].descriptorType = vk::DescriptorType::eUniformBuffer;
+    descSetLayoutBinding[0].descriptorCount = 1;
+    descSetLayoutBinding[0].stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eGeometry | vk::ShaderStageFlagBits::eFragment;
+
+    descSetLayoutBinding[1].binding = 1;
+    descSetLayoutBinding[1].descriptorType = vk::DescriptorType::eUniformBuffer;
+    descSetLayoutBinding[1].descriptorCount = 1;
+    descSetLayoutBinding[1].stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eGeometry | vk::ShaderStageFlagBits::eFragment;
+
+    descSetLayoutBinding[2].binding = 2;
+    descSetLayoutBinding[2].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    descSetLayoutBinding[2].descriptorCount = 1;
+    descSetLayoutBinding[2].stageFlags = vk::ShaderStageFlagBits::eFragment;
+    descSetLayoutBinding[2].pImmutableSamplers = nullptr;
+
+    vk::DescriptorSetLayoutCreateInfo descSetLayoutCreateInfo{};
+    descSetLayoutCreateInfo.bindingCount = static_cast<uint32_t>(std::size(descSetLayoutBinding));
+    descSetLayoutCreateInfo.pBindings = descSetLayoutBinding;
+
+    vk::UniqueDescriptorSetLayout descSetLayout = device->createDescriptorSetLayoutUnique(descSetLayoutCreateInfo);
+
+    //デスクリプタプールの作成
+    vk::DescriptorPoolSize descPoolSize[2];
+    descPoolSize[0].type = vk::DescriptorType::eUniformBuffer;
+    descPoolSize[0].descriptorCount = 1;
+    descPoolSize[1].type = vk::DescriptorType::eUniformBuffer;
+    descPoolSize[1].descriptorCount = 1;
+
+    vk::DescriptorPoolCreateInfo descPoolCreateInfo;
+    descPoolCreateInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
+    descPoolCreateInfo.poolSizeCount = 2;
+    descPoolCreateInfo.pPoolSizes = descPoolSize;
+    descPoolCreateInfo.maxSets = 1;
+
+    vk::UniqueDescriptorPool descPool = device->createDescriptorPoolUnique(descPoolCreateInfo);
+
+    //デスクリプタセットの作成
+    vk::DescriptorSetAllocateInfo descSetAllocInfo;
+
+    auto descSetLayouts = { descSetLayout.get() };
+
+    descSetAllocInfo.descriptorPool = descPool.get();
+    descSetAllocInfo.descriptorSetCount = descSetLayouts.size();
+    descSetAllocInfo.pSetLayouts = descSetLayouts.begin();
+
+    std::vector<vk::UniqueDescriptorSet> descSets = device->allocateDescriptorSetsUnique(descSetAllocInfo);
+
+    //デスクリプタの更新
+    vk::DescriptorBufferInfo descBufInfo[1];
     descBufInfo[0].buffer = uniformBuf.get();
     descBufInfo[0].offset = 0;
     descBufInfo[0].range = sceneDataSize;
@@ -1138,6 +1136,104 @@ int main() {
     writeDescSet[1].pBufferInfo = descBufInfoDynamic;
 
     device->updateDescriptorSets({ writeDescSet }, {});
+
+    // サンプラーの作成
+    vk::SamplerCreateInfo samplerCreateInfo{};
+    samplerCreateInfo.magFilter = vk::Filter::eLinear; // マグニフィケーションフィルタリング
+    samplerCreateInfo.minFilter = vk::Filter::eLinear; // ミニフィケーションフィルタリング
+    samplerCreateInfo.addressModeU = vk::SamplerAddressMode::eRepeat; // U方向のアドレッシングモード
+    samplerCreateInfo.addressModeV = vk::SamplerAddressMode::eRepeat; // V方向のアドレッシングモード
+    samplerCreateInfo.addressModeW = vk::SamplerAddressMode::eRepeat; // W方向のアドレッシングモード
+    samplerCreateInfo.anisotropyEnable = VK_FALSE; // アニソトロピックフィルタリングの無効化
+    samplerCreateInfo.maxAnisotropy = 1.0f; // アニソトロピックフィルタリングの最大サンプル数
+    samplerCreateInfo.borderColor = vk::BorderColor::eIntOpaqueBlack; // 境界色
+    samplerCreateInfo.unnormalizedCoordinates = VK_FALSE; // 正規化された座標を使用
+    samplerCreateInfo.compareEnable = VK_FALSE; // 比較モードの無効化
+    samplerCreateInfo.compareOp = vk::CompareOp::eAlways; // 比較演算子
+    samplerCreateInfo.mipmapMode = vk::SamplerMipmapMode::eLinear; // ミップマップモード
+    samplerCreateInfo.mipLodBias = 0.0f; // ミップマップレベルオブディテールバイアス
+    samplerCreateInfo.minLod = 0.0f; // 最小ミップマップレベル
+    samplerCreateInfo.maxLod = 0.0f; // 最大ミップマップレベル
+
+    vk::UniqueSampler sampler = device->createSamplerUnique(samplerCreateInfo);
+
+
+    // シェーディングステージ用のデスクリプタセットレイアウトの作成
+    std::vector<vk::DescriptorSetLayoutBinding> shadingLayoutBindings(gBufferFormats.size() + 1);
+    for (size_t i = 0; i < gBufferFormats.size(); ++i) {
+        shadingLayoutBindings[i].binding = static_cast<uint32_t>(i);
+        shadingLayoutBindings[i].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        shadingLayoutBindings[i].descriptorCount = 1;
+        shadingLayoutBindings[i].stageFlags = vk::ShaderStageFlagBits::eFragment;
+        shadingLayoutBindings[i].pImmutableSamplers = nullptr;
+    }
+
+    // ユニフォームバッファのバインディング
+    shadingLayoutBindings[gBufferFormats.size()].binding = static_cast<uint32_t>(gBufferFormats.size());
+    shadingLayoutBindings[gBufferFormats.size()].descriptorType = vk::DescriptorType::eUniformBuffer;
+    shadingLayoutBindings[gBufferFormats.size()].descriptorCount = 1;
+    shadingLayoutBindings[gBufferFormats.size()].stageFlags = vk::ShaderStageFlagBits::eFragment;
+    shadingLayoutBindings[gBufferFormats.size()].pImmutableSamplers = nullptr;
+
+    vk::DescriptorSetLayoutCreateInfo shadingLayoutCreateInfo{};
+    shadingLayoutCreateInfo.bindingCount = static_cast<uint32_t>(shadingLayoutBindings.size());
+    shadingLayoutCreateInfo.pBindings = shadingLayoutBindings.data();
+
+    vk::UniqueDescriptorSetLayout shadingDescSetLayout = device->createDescriptorSetLayoutUnique(shadingLayoutCreateInfo);
+
+    // シェーディングステージ用のデスクリプタプールの作成
+    std::vector<vk::DescriptorPoolSize> shadingPoolSizes(gBufferFormats.size() + 1);
+    for (size_t i = 0; i < gBufferFormats.size(); ++i) {
+        shadingPoolSizes[i].type = vk::DescriptorType::eCombinedImageSampler;
+        shadingPoolSizes[i].descriptorCount = 1;
+    }
+
+    // ユニフォームバッファのプールサイズ
+    shadingPoolSizes[gBufferFormats.size()].type = vk::DescriptorType::eUniformBuffer;
+    shadingPoolSizes[gBufferFormats.size()].descriptorCount = 1;
+
+    vk::DescriptorPoolCreateInfo shadingPoolCreateInfo{};
+    shadingPoolCreateInfo.poolSizeCount = static_cast<uint32_t>(shadingPoolSizes.size());
+    shadingPoolCreateInfo.pPoolSizes = shadingPoolSizes.data();
+    shadingPoolCreateInfo.maxSets = 1;
+
+    vk::UniqueDescriptorPool shadingDescPool = device->createDescriptorPoolUnique(shadingPoolCreateInfo);
+
+    // シェーディングステージ用のデスクリプタセットの作成
+    vk::DescriptorSetAllocateInfo shadingDescSetAllocInfo{};
+    shadingDescSetAllocInfo.descriptorPool = shadingDescPool.get();
+    shadingDescSetAllocInfo.descriptorSetCount = 1;
+    shadingDescSetAllocInfo.pSetLayouts = &shadingDescSetLayout.get();
+
+    vk::UniqueDescriptorSet shadingDescSet = std::move(device->allocateDescriptorSetsUnique(shadingDescSetAllocInfo).front());
+
+    // シェーディングステージ用のデスクリプタセットの更新
+    std::vector<vk::DescriptorImageInfo> gBufferImageInfos(gBufferFormats.size());
+    for (size_t i = 0; i < gBufferFormats.size(); ++i) {
+        gBufferImageInfos[i].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        gBufferImageInfos[i].imageView = gBufferImageViews[i].get();
+        gBufferImageInfos[i].sampler = sampler.get();
+    }
+
+    std::vector<vk::WriteDescriptorSet> shadingWriteDescSets(gBufferFormats.size() + 1);
+    for (size_t i = 0; i < gBufferFormats.size(); ++i) {
+        shadingWriteDescSets[i].dstSet = shadingDescSet.get();
+        shadingWriteDescSets[i].dstBinding = static_cast<uint32_t>(i);
+        shadingWriteDescSets[i].dstArrayElement = 0;
+        shadingWriteDescSets[i].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        shadingWriteDescSets[i].descriptorCount = 1;
+        shadingWriteDescSets[i].pImageInfo = &gBufferImageInfos[i];
+    }
+
+    // ユニフォームバッファのデスクリプタセットの更新
+    shadingWriteDescSets[gBufferFormats.size()].dstSet = shadingDescSet.get();
+    shadingWriteDescSets[gBufferFormats.size()].dstBinding = static_cast<uint32_t>(gBufferFormats.size());
+    shadingWriteDescSets[gBufferFormats.size()].dstArrayElement = 0;
+    shadingWriteDescSets[gBufferFormats.size()].descriptorType = vk::DescriptorType::eUniformBuffer;
+    shadingWriteDescSets[gBufferFormats.size()].descriptorCount = 1;
+    shadingWriteDescSets[gBufferFormats.size()].pBufferInfo = descBufInfo;
+
+    device->updateDescriptorSets(shadingWriteDescSets, nullptr);
 
 
     //ジオメトリステージ用レンダーパスの作成
@@ -1233,7 +1329,53 @@ int main() {
 
     vk::UniqueRenderPass gBufferRenderPass = device->createRenderPassUnique(gBufferRenderPassInfo);
 
+    // ライティングパス用のレンダーパスの作成
+    vk::AttachmentDescription colorAttachment{};
+    colorAttachment.format = swapchainFormat.format;
+    colorAttachment.samples = vk::SampleCountFlagBits::e1;
+    colorAttachment.loadOp = vk::AttachmentLoadOp::eClear;
+    colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
+    colorAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    colorAttachment.initialLayout = vk::ImageLayout::eUndefined;
+    colorAttachment.finalLayout = vk::ImageLayout::ePresentSrcKHR;
+
+    vk::AttachmentReference colorAttachmentRef{};
+    colorAttachmentRef.attachment = 0;
+    colorAttachmentRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
+
+    vk::AttachmentDescription depthAttachment{};
+    depthAttachment.format = depthFormat;
+    depthAttachment.samples = vk::SampleCountFlagBits::e1;
+    depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
+    depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
+    depthAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    depthAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    depthAttachment.initialLayout = vk::ImageLayout::eUndefined;
+    depthAttachment.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+    vk::AttachmentReference depthAttachmentRef{};
+    depthAttachmentRef.attachment = 1;
+    depthAttachmentRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+    vk::SubpassDescription subpass{};
+    subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorAttachmentRef;
+    subpass.pDepthStencilAttachment = &depthAttachmentRef;
+
+    std::array<vk::AttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
+
+    vk::RenderPassCreateInfo renderPassInfo{};
+    renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    renderPassInfo.pAttachments = attachments.data();
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+
+    vk::UniqueRenderPass lightingRenderPass = device->createRenderPassUnique(renderPassInfo);
+
     // Gバッファ用フレームバッファの作成
+
 
     std::vector<vk::UniqueFramebuffer> gBufferFramebuffers(swapchainImages.size());
 
@@ -1456,7 +1598,7 @@ int main() {
         frameBufCreateInfo.width = surfaceCapabilities.currentExtent.width;
         frameBufCreateInfo.height = surfaceCapabilities.currentExtent.height;
         frameBufCreateInfo.layers = 1;
-        frameBufCreateInfo.renderPass = renderpass.get();
+        frameBufCreateInfo.renderPass = lightingRenderPass.get();
         frameBufCreateInfo.attachmentCount = static_cast<uint32_t>(std::size(attachments));
         frameBufCreateInfo.pAttachments = frameBufAttachments;
 
