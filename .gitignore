@@ -3,3 +3,5 @@
 /shader.frag.spv
 /shader.vert.spv
 third_party/miniaudio.h
+lighting_shader.frag.spv
+shader.geom.spv
