@@ -999,24 +999,56 @@ int main() {
 
     vk::UniqueImageView depthImageView = device->createImageViewUnique(depthImageViewCreateInfo);
 
-    vk::SamplerCreateInfo samplerInfo = {};
-    samplerInfo.magFilter = vk::Filter::eLinear;
-    samplerInfo.minFilter = vk::Filter::eLinear;
-    samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
-    samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
-    samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-    samplerInfo.anisotropyEnable = VK_FALSE;
-    samplerInfo.maxAnisotropy = 1.0f;
-    samplerInfo.borderColor = vk::BorderColor::eIntOpaqueBlack;
-    samplerInfo.unnormalizedCoordinates = VK_FALSE;
-    samplerInfo.compareEnable = VK_FALSE;
-    samplerInfo.compareOp = vk::CompareOp::eAlways;
-    samplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
-    samplerInfo.mipLodBias = 0.0f;
-    samplerInfo.minLod = 0.0f;
-    samplerInfo.maxLod = 0.0f;
+    //Gバッファの作成
+    vk::Format gBufferFormats[] = {
+        vk::Format::eR32G32B32A32Sfloat, // Position
+        vk::Format::eR16G16B16A16Sfloat, // Normal
+        vk::Format::eR8G8B8A8Unorm       // Albedo
+    };
 
-    vk::UniqueSampler depthSampler = device->createSamplerUnique(samplerInfo);
+    std::vector<vk::UniqueImage> gBufferImages(3);
+    std::vector<vk::UniqueDeviceMemory> gBufferMemories(3);
+    std::vector<vk::UniqueImageView> gBufferImageViews(3);
+
+    for (size_t i = 0; i < 3; ++i) {
+        vk::ImageCreateInfo imageCreateInfo;
+        imageCreateInfo.imageType = vk::ImageType::e2D;
+        imageCreateInfo.format = gBufferFormats[i];
+        imageCreateInfo.extent.width = screenWidth;
+        imageCreateInfo.extent.height = screenHeight;
+        imageCreateInfo.extent.depth = 1;
+        imageCreateInfo.mipLevels = 1;
+        imageCreateInfo.arrayLayers = 1;
+        imageCreateInfo.samples = vk::SampleCountFlagBits::e1;
+        imageCreateInfo.tiling = vk::ImageTiling::eOptimal;
+        imageCreateInfo.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+        imageCreateInfo.sharingMode = vk::SharingMode::eExclusive;
+        imageCreateInfo.initialLayout = vk::ImageLayout::eUndefined;
+
+        gBufferImages[i] = device->createImageUnique(imageCreateInfo);
+
+        vk::MemoryRequirements memReq = device->getImageMemoryRequirements(gBufferImages[i].get());
+        vk::MemoryAllocateInfo memAllocInfo;
+        memAllocInfo.allocationSize = memReq.size;
+        if(!memoryChecker(physicalDevice.getMemoryProperties(), memReq, memAllocInfo, vk::MemoryPropertyFlagBits::eDeviceLocal)) {
+            return -1;
+        }
+
+        gBufferMemories[i] = device->allocateMemoryUnique(memAllocInfo);
+        device->bindImageMemory(gBufferImages[i].get(), gBufferMemories[i].get(), 0);
+
+        vk::ImageViewCreateInfo imageViewCreateInfo;
+        imageViewCreateInfo.image = gBufferImages[i].get();
+        imageViewCreateInfo.viewType = vk::ImageViewType::e2D;
+        imageViewCreateInfo.format = gBufferFormats[i];
+        imageViewCreateInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        imageViewCreateInfo.subresourceRange.baseMipLevel = 0;
+        imageViewCreateInfo.subresourceRange.levelCount = 1;
+        imageViewCreateInfo.subresourceRange.baseArrayLayer = 0;
+        imageViewCreateInfo.subresourceRange.layerCount = 1;
+
+        gBufferImageViews[i] = device->createImageViewUnique(imageViewCreateInfo);
+    }
 
     // イメージの作成
 /*
@@ -1090,12 +1122,7 @@ int main() {
     descBufInfoDynamic[0].offset = alignedOffset;  // モデル行列はview/projection行列の後に配置
     descBufInfoDynamic[0].range = modelMatricesSize;    // 各モデル行列のサイズ
 
-    vk::DescriptorImageInfo depthImageInfo = {};
-    depthImageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-    depthImageInfo.imageView = depthImageView.get();
-    depthImageInfo.sampler = depthSampler.get();
-
-    vk::WriteDescriptorSet writeDescSet[3];
+    vk::WriteDescriptorSet writeDescSet[2];
     writeDescSet[0].dstSet = descSets[0].get();
     writeDescSet[0].dstBinding = 0;
     writeDescSet[0].dstArrayElement = 0;
@@ -1109,13 +1136,6 @@ int main() {
     writeDescSet[1].descriptorType = vk::DescriptorType::eUniformBuffer;
     writeDescSet[1].descriptorCount = 1;
     writeDescSet[1].pBufferInfo = descBufInfoDynamic;
-
-    writeDescSet[2].dstSet = descSets[0].get();
-    writeDescSet[2].dstBinding = 2; // binding 2 の設定
-    writeDescSet[2].dstArrayElement = 0;
-    writeDescSet[2].descriptorType = vk::DescriptorType::eCombinedImageSampler; // デプスバッファのサンプラー
-    writeDescSet[2].descriptorCount = 1;
-    writeDescSet[2].pImageInfo = &depthImageInfo;
 
     device->updateDescriptorSets({ writeDescSet }, {});
 
