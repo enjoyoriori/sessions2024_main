@@ -1,6 +1,7 @@
 #version 450
 layout(location = 0) in vec3 vertColor[];  // 各頂点の入力色
 layout(location = 1) in vec3 geomPos[];   // 各頂点の出力色
+layout(location = 2) in uint geomObjectID[];  // オブジェクトID
 layout(triangles) in;
 
 layout(triangle_strip, max_vertices = 3) out;
@@ -8,6 +9,8 @@ layout(triangle_strip, max_vertices = 3) out;
 
 layout(location = 0) out vec3 fragNormal;   // 各頂点の出力色
 layout(location = 1) out vec3 fragDepth;  // 各頂点の法線
+layout(location = 2) out uint fragObjectID;  // 各頂点のID
+
 
 void main() {
     // 三角形の3頂点からベクトルを計算
@@ -22,6 +25,7 @@ void main() {
         gl_Position = gl_in[i].gl_Position;
         fragNormal = normal;  // 入力色をそのまま出力
         fragDepth = geomPos[i];  // デプス値を計算して出力
+        fragObjectID = geomObjectID[i];  // IDをそのまま出力
         EmitVertex();
     }
     EndPrimitive();

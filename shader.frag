@@ -10,6 +10,7 @@ layout(set = 0, binding = 0) uniform MVPData {
 
 layout(location = 0) in vec3 fragNormal;
 layout(location = 1) in vec3 fragPosition; 
+layout(location = 2) flat in uint fragMaterialIndex;
 layout(set = 0, binding = 2) uniform sampler2D depthTexture; // デプスバッファのサンプラー
 
 layout(location = 0) out vec4 outPosition; // Gバッファの位置

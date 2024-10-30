@@ -249,6 +249,10 @@ struct Camera {
     } 
 };
 
+struct Instance {
+    uint32_t objectIndex;
+    glm::mat4 modelMatrices;
+};
 
 std::vector<Object> loadObjectsFromCSV(const std::string& filename) {
     std::ifstream file(filename);
@@ -384,6 +388,43 @@ Camera loadCameraFromCSV(const std::string& filename) {//viewMatrixの読み込�
     return camera;
 };
 
+std::vector<Instance> createInstanceData(std::vector<Object>& objects, std::vector<uint32_t>& objectIndices) {
+    std::vector<Instance> instanceData;
+    Instance data;
+    uint32_t objectIndex;
+
+    for (uint32_t i = 0; i < objects.size(); i++) {
+        bool exists = false;
+        for(uint32_t j = 0; j < objectIndices.size(); j++) {
+            if (i == objectIndices.at(j)) {
+                exists = true;
+                switch (j) {
+                    // インスタンスの処理を書く
+                    case 0:
+                        for(int k = 0; k < 6; k++) {
+                            objectIndex = i;
+                            data.objectIndex = objectIndex;
+                            data.modelMatrices = glm::mat4(1.0f);
+                            instanceData.push_back(data);
+                        }
+                        break;
+                    default:
+                        std::cerr << "インスタンスの処理が書かれていません" << std::endl;
+                        abort();
+                }
+            }
+        }
+        if (!exists) {
+            objectIndex = i;
+            data.objectIndex = objectIndex;
+            data.modelMatrices = glm::mat4(1.0f);
+            instanceData.push_back(data);
+        }
+    }
+
+    return instanceData;
+
+}
 
 /*
 std::vector<Vertex> vertices = {
@@ -561,6 +602,9 @@ int main() {
         vertexCount += obj.vertices.size();
         indexCount += obj.indices.size();
     }
+
+    std::vector<uint32_t> instancingIndices = {0};
+    std::vector<Instance> instances = createInstanceData(objects, instancingIndices); // インスタンスの作成
 
     //カメラをCSVファイルから読み込む
     Camera camera = loadCameraFromCSV("../../camera.csv");
@@ -792,6 +836,87 @@ int main() {
         graphicsQueue.waitIdle();
     }
 
+    //std::cout << "Instance Indices: " << instances.size() << std::endl;
+
+    // インスタンスバッファの作成
+    vk::BufferCreateInfo instanceBufferCreateInfo{};
+    instanceBufferCreateInfo.size = sizeof(Instance) * instances.size();
+    instanceBufferCreateInfo.usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst;
+    instanceBufferCreateInfo.sharingMode = vk::SharingMode::eExclusive;
+
+    vk::UniqueBuffer instanceBuffer = device->createBufferUnique(instanceBufferCreateInfo);
+
+    vk::MemoryRequirements instanceMemRequirements = device->getBufferMemoryRequirements(instanceBuffer.get());
+    vk::MemoryAllocateInfo instanceAllocInfo{};
+    instanceAllocInfo.allocationSize = instanceMemRequirements.size;
+
+    if (!memoryChecker(physicalDevice.getMemoryProperties(), instanceMemRequirements, instanceAllocInfo, vk::MemoryPropertyFlagBits::eDeviceLocal)) {
+        return -1;
+    }
+
+    vk::UniqueDeviceMemory instanceBufferMemory = device->allocateMemoryUnique(instanceAllocInfo);
+    device->bindBufferMemory(instanceBuffer.get(), instanceBufferMemory.get(), 0);
+
+    // ステージングバッファの作成
+    {
+        vk::BufferCreateInfo stagingBufferCreateInfo{};
+        stagingBufferCreateInfo.size = sizeof(Instance) * instances.size();
+        stagingBufferCreateInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+        stagingBufferCreateInfo.sharingMode = vk::SharingMode::eExclusive;
+
+        vk::UniqueBuffer stagingBuffer = device->createBufferUnique(stagingBufferCreateInfo);
+
+        vk::MemoryRequirements stagingMemRequirements = device->getBufferMemoryRequirements(stagingBuffer.get());
+        vk::MemoryAllocateInfo stagingAllocInfo{};
+        stagingAllocInfo.allocationSize = stagingMemRequirements.size;
+
+        if (!memoryChecker(physicalDevice.getMemoryProperties(), stagingMemRequirements, stagingAllocInfo, vk::MemoryPropertyFlagBits::eHostVisible)) {
+            return -1;
+        }
+
+        vk::UniqueDeviceMemory stagingBufferMemory = device->allocateMemoryUnique(stagingAllocInfo);
+        device->bindBufferMemory(stagingBuffer.get(), stagingBufferMemory.get(), 0);
+
+        // ステージングバッファにデータをコピー
+        void* stagingData = device->mapMemory(stagingBufferMemory.get(), 0, stagingBufferCreateInfo.size);
+        std::memcpy(stagingData, instances.data(), stagingBufferCreateInfo.size);
+        device->unmapMemory(stagingBufferMemory.get());
+
+        // コマンドバッファの作成
+        vk::CommandPoolCreateInfo tmpCmdPoolCreateInfo{};
+        tmpCmdPoolCreateInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
+        tmpCmdPoolCreateInfo.flags = vk::CommandPoolCreateFlagBits::eTransient;
+        vk::UniqueCommandPool tmpCmdPool = device->createCommandPoolUnique(tmpCmdPoolCreateInfo);
+
+        vk::CommandBufferAllocateInfo tmpCmdBufAllocInfo{};
+        tmpCmdBufAllocInfo.commandPool = tmpCmdPool.get();
+        tmpCmdBufAllocInfo.commandBufferCount = 1;
+        tmpCmdBufAllocInfo.level = vk::CommandBufferLevel::ePrimary;
+        std::vector<vk::UniqueCommandBuffer> tmpCmdBufs = device->allocateCommandBuffersUnique(tmpCmdBufAllocInfo);
+
+        // データ転送命令
+        vk::BufferCopy bufCopy{};
+        bufCopy.srcOffset = 0;
+        bufCopy.dstOffset = 0;
+        bufCopy.size = stagingBufferCreateInfo.size;
+
+        vk::CommandBufferBeginInfo cmdBeginInfo{};
+        cmdBeginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+
+        tmpCmdBufs[0]->begin(cmdBeginInfo);
+        tmpCmdBufs[0]->copyBuffer(stagingBuffer.get(), instanceBuffer.get(), {bufCopy});
+        tmpCmdBufs[0]->end();
+
+        // キューでの取得
+        vk::CommandBuffer submitCmdBuf[1] = {tmpCmdBufs[0].get()};
+        vk::SubmitInfo submitInfo{};
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = submitCmdBuf;
+
+        graphicsQueue.submit({submitInfo});
+        graphicsQueue.waitIdle();
+    }
+    
     //ユニフォームバッファの作成
 
     SceeneData sceneData = {
@@ -845,15 +970,19 @@ int main() {
     void* pUniformBufMem = device->mapMemory(uniformBufMemory.get(), 0, uniformBufMemReq.size);
 
     //頂点入力バインディングデスクリプション
-
-    vk::VertexInputBindingDescription vertexBindingDescription[1];
+    vk::VertexInputBindingDescription vertexBindingDescription[2];
     vertexBindingDescription[0].binding = 0;
     vertexBindingDescription[0].stride = sizeof(Vertex);
     vertexBindingDescription[0].inputRate = vk::VertexInputRate::eVertex;
 
+    //インスタンスバインディングデスクリプション
+    vertexBindingDescription[1].binding = 1;
+    vertexBindingDescription[1].stride = sizeof(Instance);
+    vertexBindingDescription[1].inputRate = vk::VertexInputRate::eInstance;
+
     //頂点入力アトリビュートデスクリプション
 
-    vk::VertexInputAttributeDescription vertexInputDescription[4];
+    vk::VertexInputAttributeDescription vertexInputDescription[5];
     vertexInputDescription[0].binding = 0;
     vertexInputDescription[0].location = 0;
     vertexInputDescription[0].format = vk::Format::eR32G32B32Sfloat;
@@ -873,11 +1002,15 @@ int main() {
     vertexInputDescription[3].location = 3;
     vertexInputDescription[3].format = vk::Format::eR32Uint;
     vertexInputDescription[3].offset = offsetof(Vertex, objectIndex);
+
+    vertexInputDescription[4].binding = 1;
+    vertexInputDescription[4].location = 4;
+    vertexInputDescription[4].format = vk::Format::eR32G32B32A32Sfloat;
+    vertexInputDescription[4].offset = offsetof(Instance, modelMatrices);
+
     
     
     //スワップチェインの作成
-    
-
     vk::SurfaceCapabilitiesKHR surfaceCapabilities = physicalDevice.getSurfaceCapabilitiesKHR(surface.get());
     std::vector<vk::SurfaceFormatKHR> surfaceFormats = physicalDevice.getSurfaceFormatsKHR(surface.get());
     std::vector<vk::PresentModeKHR> surfacePresentModes = physicalDevice.getSurfacePresentModesKHR(surface.get());
@@ -1719,7 +1852,7 @@ int main() {
     //メインループ
     int64_t frameCount = 0;//start FrameCount
 
-    while (!glfwWindowShouldClose(window) && frameCount < 50) {
+    while (!glfwWindowShouldClose(window) && frameCount < 4271) {
         auto frameStartTime = std::chrono::high_resolution_clock::now();//フレームの開始時間を記録
         glfwPollEvents();
 
@@ -1795,7 +1928,7 @@ int main() {
         cmdBufs[0]->bindVertexBuffers(0, { vertBuf.get() }, { 0 });
         cmdBufs[0]->bindIndexBuffer(indexBuf.get(), 0, vk::IndexType::eUint16);
         cmdBufs[0]->bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout.get(), 0, { descSets[0].get() }, {});   //デスクリプタセットのバインド
-        cmdBufs[0]->drawIndexed(indexCount, 1, 0, 0, 0);
+        cmdBufs[0]->drawIndexed(indexCount, instances.size(), 0, 0, 0);
         cmdBufs[0]->endRenderPass();
 
         // ライティングパスへのレンダリング
