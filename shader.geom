@@ -8,6 +8,7 @@ layout(triangle_strip, max_vertices = 3) out;
 
 layout(location = 0) out vec3 fragNormal;   // 各頂点の出力色
 layout(location = 1) out vec3 fragDepth;  // 各頂点の法線
+layout(location = 2) out uint fragIndex;  // インデックス
 
 void main() {
     // 三角形の3頂点からベクトルを計算
@@ -22,6 +23,7 @@ void main() {
         gl_Position = gl_in[i].gl_Position;
         fragNormal = normal;  // 入力色をそのまま出力
         fragDepth = geomPos[i];  // デプス値を計算して出力
+        fragIndex = gl_PrimitiveID;  // インデックスを出力
         EmitVertex();
     }
     EndPrimitive();

@@ -10,7 +10,7 @@ layout(set = 0, binding = 0) uniform MVPData {
 
 layout(location = 0) in vec3 fragNormal;
 layout(location = 1) in vec3 fragPosition; 
-layout(set = 0, binding = 2) uniform sampler2D depthTexture; // デプスバッファのサンプラー
+layout(location = 2) in flat uint fragObjectID;
 
 layout(location = 0) out vec4 outPosition; // Gバッファの位置
 layout(location = 1) out vec4 outNormal;   // Gバッファの法線
@@ -40,7 +40,8 @@ void main() {
 
     // 最終カラーの計算
     outNormal = vec4(normal, 1.0);
-    outAlbedo = vec4(diffuse, 1.0);
+    outAlbedo = (fragObjectID == 0) ? vec4(0.1647, 1.0, 0.6941, 1.0) : 
+                (fragObjectID == 1) ? vec4(0.0, 1.0, 0.0, 1.0) : vec4(0.0, 0.0, 1.0, 1.0);
     outPosition = vec4(fragPosition, 1.0);
 
 }

@@ -76,8 +76,8 @@ struct SceeneData {
     //glm::mat4 modelMatrix; モデル行列は別で送る
     glm::mat4 viewMatrix;
     glm::mat4 projectionMatrix;
-    glm::mat4 vpInvMatrix;
     glm::vec3 cameraPos;
+    glm::vec3 lightPos[3];
 };
 
 void outputMatrix(glm::mat4 matrix) {
@@ -249,6 +249,24 @@ struct Camera {
     } 
 };
 
+struct light {
+    std::vector<glm::vec3> lightPos;
+    std::vector<KeyFrame> keyframes;
+    uint32_t upperBoundFrameIndex = 0;
+
+    glm::vec3 getLightPos(uint32_t currentFrame) {
+       if(currentFrame == keyframes.at(upperBoundFrameIndex).startFrame) {
+            int i = upperBoundFrameIndex;
+            upperBoundFrameIndex++;
+            return lightPos.at(i);
+        }
+       else{
+            std::cout << keyframes.at(upperBoundFrameIndex).startFrame << currentFrame << std::endl;
+            return lightPos.at(upperBoundFrameIndex-1);
+        }
+    }
+};
+
 
 std::vector<Object> loadObjectsFromCSV(const std::string& filename) {
     std::ifstream file(filename);
@@ -384,6 +402,52 @@ Camera loadCameraFromCSV(const std::string& filename) {//viewMatrixの読み込�
     return camera;
 };
 
+std::vector<light> loadLightsFromCSV(const std::string& filename) {
+    std::ifstream file(filename);
+    std::string line;
+    std::vector<light> lights;
+
+    if (!file.is_open()) {
+        std::cerr << "ファイルを開くことができませんでした: " << filename << std::endl;
+        return lights;
+    }
+
+    while (std::getline(file, line)) {
+        std::stringstream ss(line);
+        std::string token;
+        light l;
+        glm::vec3 pos;
+        uint32_t frame;
+        int objectIndex;
+
+        std::getline(ss, token, ',');
+        objectIndex = std::stoi(token);
+
+        std::getline(ss, token, ',');
+        frame = std::stoi(token);
+
+        std::getline(ss, token, ',');
+        pos.x = std::stof(token);
+
+        std::getline(ss, token, ',');
+        pos.y = std::stof(token);
+
+        std::getline(ss, token, ',');
+        pos.z = std::stof(token);
+
+        if (lights.size() <= objectIndex) {
+            lights.resize(objectIndex + 1);
+        }
+
+        lights[objectIndex].lightPos.push_back(pos);
+        KeyFrame keyframe;
+        keyframe.startFrame = frame;
+        lights[objectIndex].keyframes.push_back(keyframe);
+    }
+
+    file.close();
+    return lights;
+}
 
 /*
 std::vector<Vertex> vertices = {
@@ -564,6 +628,9 @@ int main() {
 
     //カメラをCSVファイルから読み込む
     Camera camera = loadCameraFromCSV("../../camera.csv");
+
+    //ライトをCSVファイルから読み込む
+    std::vector<light> lights = loadLightsFromCSV("../../light.csv");
 
     // オブジェクトの確認
     for (const auto& obj : objects) {
@@ -1719,7 +1786,7 @@ int main() {
     //メインループ
     int64_t frameCount = 0;//start FrameCount
 
-    while (!glfwWindowShouldClose(window) && frameCount < 50) {
+    while (!glfwWindowShouldClose(window) && frameCount < 4271) {
         auto frameStartTime = std::chrono::high_resolution_clock::now();//フレームの開始時間を記録
         glfwPollEvents();
 
@@ -1734,6 +1801,12 @@ int main() {
         sceneData.projectionMatrix = camera.projectionMatrices;
         sceneData.projectionMatrix[1][1] *= -1; // Y軸反転
         sceneData.cameraPos = camera.getMatrix(frameCount)[3];
+        
+        std::vector<glm::vec3> lightPositions;
+        for(int i = 0; i < lights.size(); i++){
+            lightPositions.push_back(lights.at(i).getLightPos(frameCount));
+            sceneData.lightPos[i] = lightPositions.at(i) ;
+        }
 
         // シーンデータのコピー
         std::memcpy(pUniformBufMem, &sceneData, sceneDataSize);
