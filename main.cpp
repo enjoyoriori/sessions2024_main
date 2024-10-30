@@ -1000,17 +1000,17 @@ int main() {
     vk::UniqueImageView depthImageView = device->createImageViewUnique(depthImageViewCreateInfo);
 
     //Gバッファの作成
-    vk::Format gBufferFormats[] = {
+    std::vector<vk::Format> gBufferFormats = {
         vk::Format::eR32G32B32A32Sfloat, // Position
         vk::Format::eR16G16B16A16Sfloat, // Normal
         vk::Format::eR8G8B8A8Unorm       // Albedo
     };
 
-    std::vector<vk::UniqueImage> gBufferImages(3);
-    std::vector<vk::UniqueDeviceMemory> gBufferMemories(3);
-    std::vector<vk::UniqueImageView> gBufferImageViews(3);
+    std::vector<vk::UniqueImage> gBufferImages(gBufferFormats.size());
+    std::vector<vk::UniqueDeviceMemory> gBufferMemories(gBufferFormats.size());
+    std::vector<vk::UniqueImageView> gBufferImageViews(gBufferFormats.size());
 
-    for (size_t i = 0; i < 3; ++i) {
+    for (size_t i = 0; i < gBufferFormats.size(); ++i) {
         vk::ImageCreateInfo imageCreateInfo;
         imageCreateInfo.imageType = vk::ImageType::e2D;
         imageCreateInfo.format = gBufferFormats[i];
